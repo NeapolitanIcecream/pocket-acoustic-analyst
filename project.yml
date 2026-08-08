@@ -1,0 +1,68 @@
+name: PocketAcousticAnalyst
+
+options:
+  minimumXcodeGenVersion: 2.46.0
+  bundleIdPrefix: tech.voile
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: zh-Hans
+  xcodeVersion: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: true
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+
+targets:
+  PocketAcousticAnalyst:
+    type: application
+    platform: iOS
+    sources:
+      - path: PocketAcousticAnalyst
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tech.voile.PocketAcousticAnalyst
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_CFBundleDisplayName: 声音调查助手
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: 用麦克风分析您主动开始的环境声音测量。录音默认不会离开设备。
+        INFOPLIST_KEY_NSCameraUsageDescription: 用摄像头跟踪手机在房间中的相对位置，生成声音分布图。
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: false
+    scheme:
+      gatherCoverageData: true
+      testTargets:
+        - PocketAcousticAnalystTests
+        - PocketAcousticAnalystUITests
+
+  PocketAcousticAnalystTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PocketAcousticAnalystTests
+    dependencies:
+      - target: PocketAcousticAnalyst
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tech.voile.PocketAcousticAnalystTests
+        GENERATE_INFOPLIST_FILE: true
+
+  PocketAcousticAnalystUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: PocketAcousticAnalystUITests
+    dependencies:
+      - target: PocketAcousticAnalyst
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tech.voile.PocketAcousticAnalystUITests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: PocketAcousticAnalyst
