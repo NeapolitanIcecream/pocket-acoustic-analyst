@@ -20,7 +20,7 @@ struct LowFrequencyAnalyzerTests {
             #expect(abs(tone.frequencyHz - 53.17) < 0.2)
             #expect(tone.isStable)
             #expect(result.sampleRate == sampleRate)
-            #expect(abs(result.frequencyResolutionHz - sampleRate / Double(result.windowSampleCount)) < 1e-12)
+            #expect(abs(result.binSpacingHz - sampleRate / Double(result.windowSampleCount)) < 1e-12)
         }
     }
 
@@ -144,6 +144,135 @@ struct LowFrequencyAnalyzerTests {
         #expect(throws: AcousticAnalysisError.self) {
             try analyzer.analyze(samples: signal, sampleRate: sampleRate)
         }
+    }
+
+    @Test func spectrogramBucketRetainsNonGridToneEnergy() throws {
+        let sampleRate = 48_000.0
+        let signal = SignalFixture.stationary(
+            duration: 9,
+            sampleRate: sampleRate,
+            tones: [(53.17, 0.1)]
+        )
+
+        let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+        let tone = try #require(result.tone)
+        let bucketIndex = try #require(
+            result.spectrogramFrequenciesHz.indices.min {
+                abs(result.spectrogramFrequenciesHz[$0] - tone.frequencyHz)
+                    < abs(result.spectrogramFrequenciesHz[$1] - tone.frequencyHz)
+            }
+        )
+
+        for slice in result.spectrogram {
+            #expect(abs(slice.levelsDB[bucketIndex] - tone.levelDB) < 0.2)
+        }
+    }
+
+    @Test func oneSidedBinPowerObeysParsevalForBandLimitedTone() throws {
+        let sampleRate = 48_000.0
+        let amplitude = 0.2
+        let signal = SignalFixture.stationary(
+            duration: 7,
+            sampleRate: sampleRate,
+            tones: [(53.17, amplitude)]
+        )
+
+        let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+        let spectralPower = result.spectrum.reduce(0.0) { $0 + pow(10, $1.levelDB / 10) }
+        let expectedMeanSquare = amplitude * amplitude / 2
+
+        #expect(abs(spectralPower - expectedMeanSquare) / expectedMeanSquare < 1e-5)
+    }
+
+    @Test func detectsTonesAtBothPublicBandEdges() throws {
+        let sampleRate = 48_000.0
+        for frequency in [10.1, 499.7] {
+            let signal = SignalFixture.stationary(
+                duration: 9,
+                sampleRate: sampleRate,
+                tones: [(frequency, 0.12)]
+            )
+            let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+            let tone = try #require(result.tone)
+            #expect(abs(tone.frequencyHz - frequency) < 0.25)
+        }
+    }
+
+    @Test func dcOffsetDoesNotChangeLowFrequencyResult() throws {
+        let sampleRate = 48_000.0
+        let original = SignalFixture.stationary(
+            duration: 7,
+            sampleRate: sampleRate,
+            tones: [(53.17, 0.1)]
+        )
+        let offset = original.map { $0 + 0.35 }
+
+        let originalResult = try analyzer.analyze(samples: original, sampleRate: sampleRate)
+        let offsetResult = try analyzer.analyze(samples: offset, sampleRate: sampleRate)
+
+        #expect(abs(offsetResult.lowFrequencyLevelDB - originalResult.lowFrequencyLevelDB) < 0.001)
+        #expect(abs(try #require(offsetResult.tone).frequencyHz - #require(originalResult.tone).frequencyHz) < 0.01)
+    }
+
+    @Test func twelveSecondsOutOfTwentyIsNotCalledPersistent() throws {
+        let sampleRate = 48_000.0
+        let signal = SignalFixture.gatedTone(
+            duration: 20,
+            activeUntil: 12,
+            sampleRate: sampleRate,
+            frequency: 53.17,
+            amplitude: 0.12,
+            noiseAmplitude: 0.002
+        )
+
+        let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+
+        #expect(result.tone == nil)
+    }
+
+    @Test func slowTwoHertzDriftIsNotHighStability() throws {
+        let sampleRate = 48_000.0
+        let signal = SignalFixture.chirp(
+            duration: 20,
+            sampleRate: sampleRate,
+            startFrequency: 52,
+            endFrequency: 54,
+            amplitude: 0.12,
+            noiseAmplitude: 0.002
+        )
+
+        let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+
+        #expect(result.tone?.confidence != .high)
+        #expect(result.tone?.isStable != true)
+    }
+
+    @Test func looseNearMultipleIsNotGroupedAsHarmonic() throws {
+        let sampleRate = 48_000.0
+        let signal = SignalFixture.stationary(
+            duration: 9,
+            sampleRate: sampleRate,
+            tones: [(200, 0.1), (404, 0.08)]
+        )
+
+        let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+        let tone = try #require(result.tone)
+
+        #expect(tone.harmonics.isEmpty)
+    }
+
+    @Test func missingFundamentalIsNotInvented() throws {
+        let sampleRate = 48_000.0
+        let signal = SignalFixture.stationary(
+            duration: 9,
+            sampleRate: sampleRate,
+            tones: [(106.2, 0.1), (159.3, 0.08), (212.4, 0.06)]
+        )
+
+        let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+        let tone = try #require(result.tone)
+
+        #expect(tone.frequencyHz > 100)
     }
 }
 

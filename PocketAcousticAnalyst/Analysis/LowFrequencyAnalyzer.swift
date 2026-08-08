@@ -9,7 +9,7 @@ enum AcousticAnalysisError: Error, Equatable, Sendable {
 }
 
 struct LowFrequencyAnalyzer: Sendable {
-    static let version = "low-frequency-v1"
+    static let version = "low-frequency-v2"
 
     let configuration: AnalysisConfiguration
 
@@ -22,6 +22,7 @@ struct LowFrequencyAnalyzer: Sendable {
         sampleRate: Double,
         inputRouteID: String = "unknown",
         inputChannelCount: Int = 1,
+        selectedInputChannelIndex: Int = 0,
         captureIssues: Set<MeasurementQualityIssue> = []
     ) throws -> AcousticAnalysis {
         guard sampleRate.isFinite, sampleRate > 0 else {
@@ -61,15 +62,22 @@ struct LowFrequencyAnalyzer: Sendable {
             count: windowSampleCount,
             isHalfWindow: false
         )
-        let amplitudeScale = 2 / max(Double(window.reduce(0, +)), Double.leastNonzeroMagnitude)
-        let binWidth = sampleRate / Double(windowSampleCount)
-        let minimumBin = max(1, Int(ceil(configuration.minimumFrequencyHz / binWidth)))
-        let maximumBin = min(windowSampleCount / 2, Int(floor(configuration.maximumFrequencyHz / binWidth)))
-        let bandCount = maximumBin - minimumBin + 1
+        let windowEnergy = window.reduce(0.0) { $0 + Double($1) * Double($1) }
+        let positiveFrequencyPowerScale = 2 / (Double(windowSampleCount) * windowEnergy)
+        let binSpacing = sampleRate / Double(windowSampleCount)
+
+        // Keep enough bins outside the public 10–500 Hz band to detect edge peaks
+        // and estimate each edge peak's local background.
+        let transformMinimumBin = 1
+        let guardFrequencyHz = 14.0
+        let transformMaximumBin = min(
+            windowSampleCount / 2 - 1,
+            Int(ceil((configuration.maximumFrequencyHz + guardFrequencyHz) / binSpacing))
+        )
+        let transformBandCount = transformMaximumBin - transformMinimumBin + 1
         let zeroImaginary = [Float](repeating: 0, count: windowSampleCount)
 
         var framePowers: [[Double]] = []
-        var frameBroadbandLevels: [Double] = []
         var offset = 0
 
         while offset + windowSampleCount <= samples.count {
@@ -79,47 +87,58 @@ struct LowFrequencyAnalyzer: Sendable {
             let windowed = vDSP.multiply(centered, window)
             let transformed = dft.transform(real: windowed, imaginary: zeroImaginary)
 
-            var powers = [Double](repeating: 0, count: bandCount)
-            for bin in minimumBin ... maximumBin {
+            var powers = [Double](repeating: 0, count: transformBandCount)
+            for bin in transformMinimumBin ... transformMaximumBin {
                 let real = Double(transformed.real[bin])
                 let imaginary = Double(transformed.imaginary[bin])
-                powers[bin - minimumBin] = (real * real + imaginary * imaginary) * amplitudeScale * amplitudeScale
+                powers[bin - transformMinimumBin] =
+                    (real * real + imaginary * imaginary) * positiveFrequencyPowerScale
             }
             framePowers.append(powers)
-            frameBroadbandLevels.append(levelDB(forMeanSquare: meanSquare(centered)))
             offset += hopSampleCount
         }
 
         let averagePowers = average(framePowers)
-        let averageLevels = averagePowers.map(levelDB(forPower:))
-        let spectrum = averageLevels.enumerated().map { localIndex, level in
+        let publicIndices = indices(
+            from: configuration.minimumFrequencyHz,
+            through: configuration.maximumFrequencyHz,
+            minimumBin: transformMinimumBin,
+            binSpacing: binSpacing,
+            count: averagePowers.count
+        )
+        let spectrum = publicIndices.map { localIndex in
             SpectrumPoint(
-                frequencyHz: Double(localIndex + minimumBin) * binWidth,
-                levelDB: level
+                frequencyHz: Double(localIndex + transformMinimumBin) * binSpacing,
+                levelDB: levelDB(forPower: averagePowers[localIndex])
             )
         }
+
         let tone = detectTone(
-            averageLevels: averageLevels,
+            averagePowers: averagePowers,
             framePowers: framePowers,
-            minimumBin: minimumBin,
-            binWidth: binWidth
+            minimumBin: transformMinimumBin,
+            binSpacing: binSpacing,
+            hopSeconds: Double(hopSampleCount) / sampleRate
         )
 
+        let lowFrequencyPower = publicIndices.reduce(0.0) { $0 + averagePowers[$1] }
+        let lowFrequencyLevel = levelDB(forPower: lowFrequencyPower)
+        let frameLowFrequencyLevels = framePowers.map { powers in
+            levelDB(forPower: publicIndices.reduce(0.0) { $0 + powers[$1] })
+        }
+
         var qualityIssues = captureIssues
-        let broadbandMeanSquare = meanSquare(samples)
-        let broadbandLevel = levelDB(forMeanSquare: broadbandMeanSquare)
-        if broadbandLevel < -80 {
+        if lowFrequencyLevel < -90 {
             qualityIssues.insert(.inputTooQuiet)
         }
-        let clippingFraction = Double(samples.lazy.filter { abs($0) >= 0.995 }.count) / Double(samples.count)
-        if clippingFraction > 0.001 {
+        let clippedSampleCount = samples.lazy.filter { abs($0) >= 0.995 }.count
+        if clippedSampleCount >= 3 {
             qualityIssues.insert(.clipping)
         }
-        if standardDeviation(frameBroadbandLevels) > 4 {
+        if standardDeviation(frameLowFrequencyLevels) > 4 {
             qualityIssues.insert(.unstableEnvironment)
         }
 
-        let quality = quality(for: qualityIssues)
         let spectrogramFrequencies = spectrogramFrequencies(
             minimum: configuration.minimumFrequencyHz,
             maximum: configuration.maximumFrequencyHz,
@@ -128,8 +147,9 @@ struct LowFrequencyAnalyzer: Sendable {
         let spectrogram = makeSpectrogram(
             framePowers: framePowers,
             frequencies: spectrogramFrequencies,
-            minimumBin: minimumBin,
-            binWidth: binWidth,
+            minimumBin: transformMinimumBin,
+            binSpacing: binSpacing,
+            bucketWidthHz: configuration.spectrogramStepHz,
             hopSeconds: Double(hopSampleCount) / sampleRate
         )
 
@@ -138,16 +158,18 @@ struct LowFrequencyAnalyzer: Sendable {
             sampleRate: sampleRate,
             inputRouteID: inputRouteID,
             inputChannelCount: inputChannelCount,
+            selectedInputChannelIndex: selectedInputChannelIndex,
             analysisVersion: Self.version,
             configuration: configuration,
             windowSampleCount: windowSampleCount,
-            frequencyResolutionHz: binWidth,
-            broadbandLevelDB: broadbandLevel,
+            binSpacingHz: binSpacing,
+            nominalFrequencyResolutionHz: 2 * binSpacing,
+            lowFrequencyLevelDB: lowFrequencyLevel,
             spectrum: spectrum,
             spectrogramFrequenciesHz: spectrogramFrequencies,
             spectrogram: spectrogram,
             tone: tone,
-            quality: quality
+            quality: quality(for: qualityIssues)
         )
     }
 }
@@ -156,64 +178,96 @@ private extension LowFrequencyAnalyzer {
     struct Peak {
         var index: Int
         var frequencyHz: Double
+        var binLevelDB: Double
         var levelDB: Double
         var prominenceDB: Double
     }
 
+    struct FrameObservation {
+        var frameIndex: Int
+        var peak: Peak
+        var levelDB: Double
+    }
+
     func detectTone(
-        averageLevels: [Double],
+        averagePowers: [Double],
         framePowers: [[Double]],
         minimumBin: Int,
-        binWidth: Double
+        binSpacing: Double,
+        hopSeconds: Double
     ) -> ToneAnalysis? {
         let peaks = findPeaks(
-            levels: averageLevels,
+            powers: averagePowers,
             minimumBin: minimumBin,
-            binWidth: binWidth,
+            binSpacing: binSpacing,
             minimumProminenceDB: configuration.minimumToneProminenceDB
         )
         guard !peaks.isEmpty else { return nil }
 
         let strongestLevel = peaks.map(\.levelDB).max() ?? -160
-        let scored = peaks.map { peak -> (Peak, Double, [HarmonicEvidence]) in
-            let harmonics = harmonicEvidence(for: peak, among: peaks)
+        let scored = peaks.map { peak -> (Peak, Double) in
+            let approximateHarmonics = averageHarmonicMatches(for: peak, among: peaks, binSpacing: binSpacing)
             let relativeStrength = (peak.levelDB - strongestLevel) / 10
-            let harmonicSupport = Double(harmonics.count) * 0.8
-            return (peak, relativeStrength + harmonicSupport, harmonics)
+            return (peak, relativeStrength + Double(approximateHarmonics.count) * 0.8)
         }
-        let selected = scored.max { lhs, rhs in lhs.1 < rhs.1 } ?? scored[0]
-        let primary = selected.0
-        let frameObservations = framePowers.compactMap { powers -> Peak? in
-            let levels = powers.map(levelDB(forPower:))
-            let searchRadius = max(2, Int(ceil(max(1.5, binWidth * 2) / binWidth)))
-            let lower = max(1, primary.index - searchRadius)
-            let upper = min(levels.count - 2, primary.index + searchRadius)
-            guard lower <= upper else { return nil }
-            let index = (lower ... upper).max { levels[$0] < levels[$1] } ?? primary.index
-            guard levels[index] >= levels[max(0, index - 1)], levels[index] >= levels[min(levels.count - 1, index + 1)] else {
-                return nil
-            }
-            let prominence = localProminence(levels: levels, at: index, binWidth: binWidth)
-            guard prominence >= configuration.minimumToneProminenceDB else { return nil }
-            return interpolatedPeak(levels: levels, at: index, minimumBin: minimumBin, binWidth: binWidth, prominence: prominence)
-        }
+        let primary = scored.max { $0.1 < $1.1 }?.0 ?? peaks[0]
 
-        let persistence = Double(frameObservations.count) / Double(framePowers.count)
+        let initialObservations = framePowers.enumerated().compactMap { frameIndex, powers in
+            frameObservation(
+                frameIndex: frameIndex,
+                powers: powers,
+                near: primary.index,
+                minimumBin: minimumBin,
+                binSpacing: binSpacing
+            )
+        }
+        let persistence = Double(initialObservations.count) / Double(framePowers.count)
         guard persistence >= configuration.minimumTonePersistence else { return nil }
 
-        let observedFrequencies = frameObservations.map(\.frequencyHz)
-        let spread = standardDeviation(observedFrequencies)
-        let stable = spread <= max(configuration.stableFrequencySpreadHz, binWidth * 2)
+        let frequencySpread = robustSpread(initialObservations.map(\.peak.frequencyHz))
+        let targetHalfWidthHz = min(max(max(1, 3 * frequencySpread), 1), 3)
+        let observations = initialObservations.map { observation in
+            var updated = observation
+            updated.levelDB = bandLevel(
+                powers: framePowers[observation.frameIndex],
+                centerIndex: observation.peak.index,
+                halfWidthHz: targetHalfWidthHz,
+                binSpacing: binSpacing
+            )
+            return updated
+        }
+        let levelSpread = robustSpread(observations.map(\.levelDB))
+        let stable = frequencySpread <= configuration.stableFrequencySpreadHz
+            && levelSpread <= configuration.stableLevelSpreadDB
+
+        let targetLevel = bandLevel(
+            powers: averagePowers,
+            centerIndex: primary.index,
+            halfWidthHz: targetHalfWidthHz,
+            binSpacing: binSpacing
+        )
+        let harmonics = confirmedHarmonics(
+            for: primary,
+            among: peaks,
+            framePowers: framePowers,
+            fundamentalObservations: observations,
+            minimumBin: minimumBin,
+            binSpacing: binSpacing
+        )
         let competitors = peaks
             .filter { peak in
-                peak.index != primary.index &&
-                    peak.levelDB >= primary.levelDB - 3 &&
-                    !isHarmonic(peak.frequencyHz, of: primary.frequencyHz)
+                peak.index != primary.index
+                    && peak.levelDB >= targetLevel - 3
+                    && !isHarmonic(peak.frequencyHz, of: primary.frequencyHz, binSpacing: binSpacing)
             }
             .map(\.frequencyHz)
 
         let confidence: AnalysisConfidence
-        if primary.prominenceDB >= 12, persistence >= 0.85, stable, competitors.isEmpty {
+        if primary.prominenceDB >= 12,
+           persistence >= configuration.highConfidencePersistence,
+           frequencySpread <= configuration.highConfidenceFrequencySpreadHz,
+           levelSpread <= configuration.highConfidenceLevelSpreadDB,
+           competitors.isEmpty {
             confidence = .high
         } else if primary.prominenceDB >= configuration.minimumToneProminenceDB,
                   persistence >= configuration.minimumTonePersistence,
@@ -223,36 +277,66 @@ private extension LowFrequencyAnalyzer {
             confidence = .low
         }
 
+        let observationsByFrame = Dictionary(uniqueKeysWithValues: observations.map { ($0.frameIndex, $0) })
+        let frameTrace = framePowers.indices.map { frameIndex in
+            let observation = observationsByFrame[frameIndex]
+            return ToneFrameSample(
+                offsetSeconds: Double(frameIndex) * hopSeconds,
+                frequencyHz: observation?.peak.frequencyHz,
+                levelDB: observation?.levelDB
+            )
+        }
+        let independentBlockLevels = framePowers.indices
+            .filter { $0.isMultiple(of: 2) }
+            .map { frameIndex in
+                bandLevel(
+                    powers: framePowers[frameIndex],
+                    centerIndex: primary.index,
+                    halfWidthHz: targetHalfWidthHz,
+                    binSpacing: binSpacing
+                )
+            }
+
         return ToneAnalysis(
             frequencyHz: primary.frequencyHz,
-            levelDB: primary.levelDB,
+            levelDB: targetLevel,
             prominenceDB: primary.prominenceDB,
             persistence: persistence,
-            frequencySpreadHz: spread,
-            harmonics: selected.2,
+            frequencySpreadHz: frequencySpread,
+            levelSpreadDB: levelSpread,
+            harmonics: harmonics,
             competingToneFrequenciesHz: competitors,
+            frameTrace: frameTrace,
+            independentBlockLevelsDB: independentBlockLevels,
             isStable: stable,
             confidence: confidence
         )
     }
 
     func findPeaks(
-        levels: [Double],
+        powers: [Double],
         minimumBin: Int,
-        binWidth: Double,
+        binSpacing: Double,
         minimumProminenceDB: Double
     ) -> [Peak] {
-        guard levels.count >= 3 else { return [] }
+        guard powers.count >= 3 else { return [] }
+        let levels = powers.map(levelDB(forPower:))
         var peaks: [Peak] = []
-        for index in 1 ..< levels.count - 1 where levels[index] > levels[index - 1] && levels[index] >= levels[index + 1] {
-            let prominence = localProminence(levels: levels, at: index, binWidth: binWidth)
+        for index in 1 ..< powers.count - 1
+            where levels[index] > levels[index - 1] && levels[index] >= levels[index + 1] {
+            let frequency = Double(index + minimumBin) * binSpacing
+            guard frequency >= configuration.minimumFrequencyHz,
+                  frequency <= configuration.maximumFrequencyHz
+            else { continue }
+            let prominence = bandProminence(powers: powers, at: index, binSpacing: binSpacing)
             guard prominence >= minimumProminenceDB else { continue }
             peaks.append(
                 interpolatedPeak(
+                    powers: powers,
                     levels: levels,
                     at: index,
                     minimumBin: minimumBin,
-                    binWidth: binWidth,
+                    binSpacing: binSpacing,
                     prominence: prominence
                 )
             )
@@ -260,81 +344,194 @@ private extension LowFrequencyAnalyzer {
         return peaks.sorted { $0.levelDB > $1.levelDB }
     }
 
+    func frameObservation(
+        frameIndex: Int,
+        powers: [Double],
+        near primaryIndex: Int,
+        minimumBin: Int,
+        binSpacing: Double
+    ) -> FrameObservation? {
+        let levels = powers.map(levelDB(forPower:))
+        let searchRadius = max(2, Int(ceil(max(1.5, 2 * binSpacing) / binSpacing)))
+        let lower = max(1, primaryIndex - searchRadius)
+        let upper = min(levels.count - 2, primaryIndex + searchRadius)
+        guard lower <= upper else { return nil }
+        let index = (lower ... upper).max { levels[$0] < levels[$1] } ?? primaryIndex
+        guard levels[index] >= levels[index - 1], levels[index] >= levels[index + 1] else { return nil }
+        let prominence = bandProminence(powers: powers, at: index, binSpacing: binSpacing)
+        guard prominence >= configuration.minimumFrameProminenceDB else { return nil }
+        let peak = interpolatedPeak(
+            powers: powers,
+            levels: levels,
+            at: index,
+            minimumBin: minimumBin,
+            binSpacing: binSpacing,
+            prominence: prominence
+        )
+        return FrameObservation(
+            frameIndex: frameIndex,
+            peak: peak,
+            levelDB: bandLevel(powers: powers, centerIndex: index, halfWidthHz: 1, binSpacing: binSpacing)
+        )
+    }
+
     func interpolatedPeak(
+        powers: [Double],
         levels: [Double],
         at index: Int,
         minimumBin: Int,
-        binWidth: Double,
+        binSpacing: Double,
         prominence: Double
     ) -> Peak {
         let left = levels[index - 1]
         let center = levels[index]
         let right = levels[index + 1]
         let denominator = left - 2 * center + right
-        let rawOffset = abs(denominator) > 1e-12 ? 0.5 * (left - right) / denominator : 0
+        let rawOffset = denominator < -1e-12 ? 0.5 * (left - right) / denominator : 0
         let offset = min(max(rawOffset, -0.5), 0.5)
-        let interpolatedLevel = center - 0.25 * (left - right) * offset
+        let interpolatedBinLevel = center - 0.25 * (left - right) * offset
         return Peak(
             index: index,
-            frequencyHz: Double(index + minimumBin) * binWidth + offset * binWidth,
-            levelDB: interpolatedLevel,
+            frequencyHz: Double(index + minimumBin) * binSpacing + offset * binSpacing,
+            binLevelDB: interpolatedBinLevel,
+            levelDB: bandLevel(powers: powers, centerIndex: index, halfWidthHz: 1, binSpacing: binSpacing),
             prominenceDB: prominence
         )
     }
 
-    func localProminence(levels: [Double], at index: Int, binWidth: Double) -> Double {
-        let radius = max(8, Int(ceil(12 / binWidth)))
-        let lower = max(0, index - radius)
-        let upper = min(levels.count - 1, index + radius)
-        let excludedRadius = max(2, Int(ceil(1.5 / binWidth)))
+    func bandProminence(powers: [Double], at index: Int, binSpacing: Double) -> Double {
+        let centerRadius = max(1, Int(ceil(1 / binSpacing)))
+        let centerLower = max(0, index - centerRadius)
+        let centerUpper = min(powers.count - 1, index + centerRadius)
+        let centerPower = powers[centerLower ... centerUpper].reduce(0, +)
+        let centerCount = centerUpper - centerLower + 1
+
+        let innerRadius = max(centerRadius + 1, Int(ceil(3 / binSpacing)))
+        let outerRadius = max(innerRadius, Int(floor(12 / binSpacing)))
         var background: [Double] = []
-        for candidate in lower ... upper where abs(candidate - index) > excludedRadius {
-            background.append(levels[candidate])
+        for candidate in max(0, index - outerRadius) ... min(powers.count - 1, index + outerRadius) {
+            let distance = abs(candidate - index)
+            if distance >= innerRadius, distance <= outerRadius {
+                background.append(powers[candidate])
+            }
         }
-        guard let median = median(background) else { return 0 }
-        return levels[index] - median
+        guard let backgroundMedian = median(background), backgroundMedian > 0 else { return 0 }
+        return 10 * log10(max(centerPower, 1e-16) / (Double(centerCount) * backgroundMedian))
     }
 
-    func harmonicEvidence(for fundamental: Peak, among peaks: [Peak]) -> [HarmonicEvidence] {
+    func bandLevel(
+        powers: [Double],
+        centerIndex: Int,
+        halfWidthHz: Double,
+        binSpacing: Double
+    ) -> Double {
+        let radius = max(1, Int(ceil(halfWidthHz / binSpacing)))
+        let lower = max(0, centerIndex - radius)
+        let upper = min(powers.count - 1, centerIndex + radius)
+        return levelDB(forPower: powers[lower ... upper].reduce(0, +))
+    }
+
+    func averageHarmonicMatches(for fundamental: Peak, among peaks: [Peak], binSpacing: Double) -> [Peak] {
         guard fundamental.frequencyHz > 0 else { return [] }
         let maximumOrder = min(8, Int(configuration.maximumFrequencyHz / fundamental.frequencyHz))
         guard maximumOrder >= 2 else { return [] }
+        let tolerance = max(configuration.harmonicToleranceFloorHz, 2 * binSpacing)
         return (2 ... maximumOrder).compactMap { order in
             let expected = fundamental.frequencyHz * Double(order)
-            let tolerance = max(configuration.harmonicToleranceHz, expected * 0.012)
-            guard let match = peaks
-                .filter({ abs($0.frequencyHz - expected) <= tolerance })
-                .min(by: { abs($0.frequencyHz - expected) < abs($1.frequencyHz - expected) })
+            return peaks
+                .filter { abs($0.frequencyHz - expected) <= tolerance }
+                .min { abs($0.frequencyHz - expected) < abs($1.frequencyHz - expected) }
+        }
+    }
+
+    func confirmedHarmonics(
+        for fundamental: Peak,
+        among peaks: [Peak],
+        framePowers: [[Double]],
+        fundamentalObservations: [FrameObservation],
+        minimumBin: Int,
+        binSpacing: Double
+    ) -> [HarmonicEvidence] {
+        let matches = averageHarmonicMatches(for: fundamental, among: peaks, binSpacing: binSpacing)
+        let tolerance = max(configuration.harmonicToleranceFloorHz, 2 * binSpacing)
+        guard !fundamentalObservations.isEmpty else { return [] }
+
+        return matches.compactMap { match in
+            let order = Int((match.frequencyHz / fundamental.frequencyHz).rounded())
+            guard order >= 2 else { return nil }
+            var coOccurrences = 0
+            var prominences: [Double] = []
+
+            for observation in fundamentalObservations {
+                let expected = observation.peak.frequencyHz * Double(order)
+                let expectedLocalIndex = Int((expected / binSpacing).rounded()) - minimumBin
+                let radius = max(1, Int(ceil(tolerance / binSpacing)))
+                let powers = framePowers[observation.frameIndex]
+                let lower = max(1, expectedLocalIndex - radius)
+                let upper = min(powers.count - 2, expectedLocalIndex + radius)
+                guard lower <= upper else { continue }
+                let levels = powers.map(levelDB(forPower:))
+                let index = (lower ... upper).max { levels[$0] < levels[$1] } ?? expectedLocalIndex
+                guard levels[index] >= levels[index - 1], levels[index] >= levels[index + 1] else { continue }
+                let prominence = bandProminence(powers: powers, at: index, binSpacing: binSpacing)
+                guard prominence >= configuration.minimumFrameProminenceDB else { continue }
+                let frequency = interpolatedPeak(
+                    powers: powers,
+                    levels: levels,
+                    at: index,
+                    minimumBin: minimumBin,
+                    binSpacing: binSpacing,
+                    prominence: prominence
+                ).frequencyHz
+                guard abs(frequency - expected) <= tolerance else { continue }
+                coOccurrences += 1
+                prominences.append(prominence)
+            }
+
+            let coOccurrenceRate = Double(coOccurrences) / Double(fundamentalObservations.count)
+            guard coOccurrenceRate >= configuration.harmonicCoOccurrence,
+                  let medianProminence = median(prominences),
+                  medianProminence >= configuration.minimumFrameProminenceDB
             else { return nil }
             return HarmonicEvidence(
                 order: order,
                 frequencyHz: match.frequencyHz,
                 levelDB: match.levelDB,
-                prominenceDB: match.prominenceDB
+                prominenceDB: medianProminence
             )
         }
+        .sorted { $0.order < $1.order }
     }
 
-    func isHarmonic(_ frequency: Double, of fundamental: Double) -> Bool {
+    func isHarmonic(_ frequency: Double, of fundamental: Double, binSpacing: Double) -> Bool {
         guard fundamental > 0 else { return false }
-        let ratio = frequency / fundamental
-        let order = ratio.rounded()
+        let order = (frequency / fundamental).rounded()
         guard order >= 2 else { return false }
-        return abs(frequency - order * fundamental) <= max(configuration.harmonicToleranceHz, frequency * 0.012)
+        let tolerance = max(configuration.harmonicToleranceFloorHz, 2 * binSpacing)
+        return abs(frequency - order * fundamental) <= tolerance
     }
 
     func makeSpectrogram(
         framePowers: [[Double]],
         frequencies: [Double],
         minimumBin: Int,
-        binWidth: Double,
+        binSpacing: Double,
+        bucketWidthHz: Double,
         hopSeconds: Double
     ) -> [SpectrogramSlice] {
-        framePowers.enumerated().map { frameIndex, powers in
+        let halfWidth = bucketWidthHz / 2
+        return framePowers.enumerated().map { frameIndex, powers in
             let levels = frequencies.map { frequency -> Double in
-                let globalBin = Int((frequency / binWidth).rounded())
-                let localBin = min(max(globalBin - minimumBin, 0), powers.count - 1)
-                return levelDB(forPower: powers[localBin])
+                let lowerFrequency = max(configuration.minimumFrequencyHz, frequency - halfWidth)
+                let upperFrequency = min(configuration.maximumFrequencyHz, frequency + halfWidth)
+                let bucketIndices = indices(
+                    from: lowerFrequency,
+                    below: upperFrequency,
+                    minimumBin: minimumBin,
+                    binSpacing: binSpacing,
+                    count: powers.count
+                )
+                return levelDB(forPower: bucketIndices.reduce(0.0) { $0 + powers[$1] })
             }
             return SpectrogramSlice(offsetSeconds: Double(frameIndex) * hopSeconds, levelsDB: levels)
         }
@@ -342,14 +539,43 @@ private extension LowFrequencyAnalyzer {
 
     func spectrogramFrequencies(minimum: Double, maximum: Double, step: Double) -> [Double] {
         guard step > 0 else { return [] }
-        return stride(from: minimum, through: maximum, by: step).map { $0 }
+        return stride(from: minimum, to: maximum, by: step).map { lowerEdge in
+            min(lowerEdge + step / 2, maximum)
+        }
+    }
+
+    func indices(
+        from lowerFrequency: Double,
+        through upperFrequency: Double,
+        minimumBin: Int,
+        binSpacing: Double,
+        count: Int
+    ) -> [Int] {
+        let lower = max(0, Int(ceil(lowerFrequency / binSpacing)) - minimumBin)
+        let upper = min(count - 1, Int(floor(upperFrequency / binSpacing)) - minimumBin)
+        guard lower <= upper else { return [] }
+        return Array(lower ... upper)
+    }
+
+    func indices(
+        from lowerFrequency: Double,
+        below upperFrequency: Double,
+        minimumBin: Int,
+        binSpacing: Double,
+        count: Int
+    ) -> [Int] {
+        let lower = max(0, Int(ceil(lowerFrequency / binSpacing)) - minimumBin)
+        let upper = min(count - 1, Int(ceil(upperFrequency / binSpacing)) - minimumBin - 1)
+        guard lower <= upper else { return [] }
+        return Array(lower ... upper)
     }
 
     func quality(for issues: Set<MeasurementQualityIssue>) -> MeasurementQuality {
         var score = 1.0
         for issue in issues {
             switch issue {
-            case .externalInterruption, .insufficientDuration:
+            case .externalInterruption, .insufficientDuration, .routeChanged,
+                 .engineConfigurationChanged, .mediaServicesReset, .appBackgrounded:
                 score = 0
             case .clipping, .inputTooQuiet:
                 score -= 0.45
@@ -373,17 +599,6 @@ private extension LowFrequencyAnalyzer {
         return result.map { $0 / Double(frames.count) }
     }
 
-    func meanSquare<C: Collection>(_ values: C) -> Double where C.Element == Float {
-        guard !values.isEmpty else { return 0 }
-        return values.reduce(0.0) { partial, value in
-            partial + Double(value) * Double(value)
-        } / Double(values.count)
-    }
-
-    func levelDB(forMeanSquare value: Double) -> Double {
-        10 * log10(max(value, 1e-16))
-    }
-
     func levelDB(forPower value: Double) -> Double {
         10 * log10(max(value, 1e-16))
     }
@@ -396,6 +611,12 @@ private extension LowFrequencyAnalyzer {
             return (sorted[middle - 1] + sorted[middle]) / 2
         }
         return sorted[middle]
+    }
+
+    func robustSpread(_ values: [Double]) -> Double {
+        guard let center = median(values), !values.isEmpty else { return 0 }
+        let deviations = values.map { abs($0 - center) }
+        return 1.4826 * (median(deviations) ?? 0)
     }
 
     func standardDeviation(_ values: [Double]) -> Double {

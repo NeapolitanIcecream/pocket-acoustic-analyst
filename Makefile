@@ -14,4 +14,3 @@ test-core: bootstrap
 
 clean:
 	xcodebuild -project PocketAcousticAnalyst.xcodeproj -scheme PocketAcousticAnalyst -derivedDataPath DerivedData clean
-

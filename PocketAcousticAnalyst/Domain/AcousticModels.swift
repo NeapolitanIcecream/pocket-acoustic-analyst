@@ -6,9 +6,15 @@ struct AnalysisConfiguration: Codable, Equatable, Sendable {
     var minimumWindowDurationSeconds: Double = 2
     var hopFraction: Double = 0.5
     var minimumToneProminenceDB: Double = 8
-    var minimumTonePersistence: Double = 0.68
-    var stableFrequencySpreadHz: Double = 1.5
-    var harmonicToleranceHz: Double = 1.5
+    var minimumFrameProminenceDB: Double = 6
+    var minimumTonePersistence: Double = 0.8
+    var highConfidencePersistence: Double = 0.9
+    var stableFrequencySpreadHz: Double = 0.5
+    var highConfidenceFrequencySpreadHz: Double = 0.25
+    var stableLevelSpreadDB: Double = 3
+    var highConfidenceLevelSpreadDB: Double = 1.5
+    var harmonicToleranceFloorHz: Double = 0.5
+    var harmonicCoOccurrence: Double = 0.7
     var spectrogramStepHz: Double = 5
 
     static let p0 = AnalysisConfiguration()
@@ -37,6 +43,10 @@ enum MeasurementQualityIssue: String, Codable, Hashable, Sendable {
     case positionUnavailable
     case trackingLimited
     case insufficientDuration
+    case routeChanged
+    case engineConfigurationChanged
+    case mediaServicesReset
+    case appBackgrounded
 }
 
 struct MeasurementQuality: Codable, Equatable, Sendable {
@@ -50,6 +60,8 @@ struct MeasurementQuality: Codable, Equatable, Sendable {
 
     var isUsable: Bool {
         score >= 0.6 && !issues.contains(.externalInterruption) && !issues.contains(.insufficientDuration)
+            && !issues.contains(.routeChanged) && !issues.contains(.engineConfigurationChanged)
+            && !issues.contains(.mediaServicesReset) && !issues.contains(.appBackgrounded)
     }
 
     var confidence: AnalysisConfidence {
@@ -84,14 +96,25 @@ struct HarmonicEvidence: Codable, Equatable, Sendable, Identifiable {
     var id: Int { order }
 }
 
+struct ToneFrameSample: Codable, Equatable, Sendable, Identifiable {
+    var offsetSeconds: Double
+    var frequencyHz: Double?
+    var levelDB: Double?
+
+    var id: Double { offsetSeconds }
+}
+
 struct ToneAnalysis: Codable, Equatable, Sendable {
     var frequencyHz: Double
     var levelDB: Double
     var prominenceDB: Double
     var persistence: Double
     var frequencySpreadHz: Double
+    var levelSpreadDB: Double
     var harmonics: [HarmonicEvidence]
     var competingToneFrequenciesHz: [Double]
+    var frameTrace: [ToneFrameSample]
+    var independentBlockLevelsDB: [Double]
     var isStable: Bool
     var confidence: AnalysisConfidence
 }
@@ -103,11 +126,13 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
     var sampleRate: Double
     var inputRouteID: String
     var inputChannelCount: Int
+    var selectedInputChannelIndex: Int
     var analysisVersion: String
     var configuration: AnalysisConfiguration
     var windowSampleCount: Int
-    var frequencyResolutionHz: Double
-    var broadbandLevelDB: Double
+    var binSpacingHz: Double
+    var nominalFrequencyResolutionHz: Double
+    var lowFrequencyLevelDB: Double
     var spectrum: [SpectrumPoint]
     var spectrogramFrequenciesHz: [Double]
     var spectrogram: [SpectrogramSlice]
@@ -121,11 +146,13 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
         sampleRate: Double,
         inputRouteID: String,
         inputChannelCount: Int = 1,
+        selectedInputChannelIndex: Int = 0,
         analysisVersion: String,
         configuration: AnalysisConfiguration,
         windowSampleCount: Int,
-        frequencyResolutionHz: Double,
-        broadbandLevelDB: Double,
+        binSpacingHz: Double,
+        nominalFrequencyResolutionHz: Double,
+        lowFrequencyLevelDB: Double,
         spectrum: [SpectrumPoint],
         spectrogramFrequenciesHz: [Double],
         spectrogram: [SpectrogramSlice],
@@ -138,11 +165,13 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
         self.sampleRate = sampleRate
         self.inputRouteID = inputRouteID
         self.inputChannelCount = inputChannelCount
+        self.selectedInputChannelIndex = selectedInputChannelIndex
         self.analysisVersion = analysisVersion
         self.configuration = configuration
         self.windowSampleCount = windowSampleCount
-        self.frequencyResolutionHz = frequencyResolutionHz
-        self.broadbandLevelDB = broadbandLevelDB
+        self.binSpacingHz = binSpacingHz
+        self.nominalFrequencyResolutionHz = nominalFrequencyResolutionHz
+        self.lowFrequencyLevelDB = lowFrequencyLevelDB
         self.spectrum = spectrum
         self.spectrogramFrequenciesHz = spectrogramFrequenciesHz
         self.spectrogram = spectrogram

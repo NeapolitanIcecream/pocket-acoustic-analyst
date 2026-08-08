@@ -11,19 +11,48 @@ struct RootView: View {
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .humInvestigation:
-                        Text("嗡声调查")
+                        HumInvestigationView(
+                            captureClient: appModel.audioCapture,
+                            analyzer: appModel.analyzer,
+                            isDemoMode: appModel.isDemoMode
+                        )
                     case let .spatialScan(analysisID):
-                        Text("空间复测 \(analysisID.uuidString)")
-                    case .comparison:
-                        Text("前后对比")
+                        if let analysis = appModel.analysis(id: analysisID) {
+                            SpatialScanView(
+                                referenceAnalysis: analysis,
+                                captureClient: appModel.audioCapture,
+                                poseClient: appModel.isDemoMode
+                                    ? DemoPoseTrackingClient()
+                                    : ARPoseTrackingClient(),
+                                analyzer: appModel.analyzer
+                            )
+                        } else {
+                            ContentUnavailableView(
+                                "找不到起始测量",
+                                systemImage: "exclamationmark.triangle",
+                                description: Text("请返回首页重新检查持续嗡声。")
+                            )
+                        }
+                    case let .comparison(analysisID):
+                        BeforeAfterView(
+                            referenceAnalysis: analysisID.flatMap { appModel.analysis(id: $0) },
+                            captureClient: appModel.audioCapture,
+                            poseClient: appModel.isDemoMode
+                                ? DemoPoseTrackingClient(poses: [
+                                    SpatialCoordinate(x: 0, y: 0, z: 0),
+                                    SpatialCoordinate(x: 0.02, y: 0, z: 0),
+                                ])
+                                : ARPoseTrackingClient(),
+                            analyzer: appModel.analyzer
+                        )
                     case .history:
-                        Text("调查记录")
+                        HistoryView()
                     case .aboutMeasurement:
                         MeasurementLimitsView()
                     }
                 }
         }
         .tint(AppTheme.accent)
+        .task { await appModel.loadHistory() }
     }
 }
-

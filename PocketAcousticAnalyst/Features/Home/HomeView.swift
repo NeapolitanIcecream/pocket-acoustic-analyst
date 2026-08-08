@@ -72,7 +72,12 @@ struct HomeView: View {
             Text("其他调查")
                 .font(.headline)
 
-            ProblemRow(icon: "arrow.left.and.right", title: "比较调整前后", detail: "复测一次变化是否真实") {
+            ProblemRow(
+                icon: "arrow.left.and.right",
+                title: "比较调整前后",
+                detail: "复测一次变化是否真实",
+                accessibilityIdentifier: "startBeforeAfter"
+            ) {
                 appModel.path.append(.comparison(analysisID: nil))
             }
 
@@ -97,6 +102,7 @@ private struct ProblemRow: View {
     let title: String
     let detail: String
     var isEnabled = true
+    var accessibilityIdentifier: String?
     let action: () -> Void
 
     var body: some View {
@@ -118,6 +124,6 @@ private struct ProblemRow: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.58)
+        .accessibilityIdentifier(accessibilityIdentifier ?? "")
     }
 }
-
