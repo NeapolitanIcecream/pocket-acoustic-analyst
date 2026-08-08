@@ -366,16 +366,22 @@ struct LowFrequencyAnalyzerTests {
   }
 
   @Test func detectsTonesAtBothPublicBandEdges() throws {
-    let sampleRate = 48_000.0
-    for frequency in [10.1, 499.7] {
-      let signal = SignalFixture.stationary(
-        duration: 9,
-        sampleRate: sampleRate,
-        tones: [(frequency, 0.12)]
-      )
-      let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
-      let tone = try #require(result.tone)
-      #expect(abs(tone.frequencyHz - frequency) < 0.25)
+    for sampleRate in [44_100.0, 48_000.0] {
+      for frequency in [10.0, 500.0] {
+        let signal = SignalFixture.stationary(
+          duration: 9,
+          sampleRate: sampleRate,
+          tones: [(frequency, 0.12)]
+        )
+        let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+        let tone = try #require(result.tone)
+        let plan = try #require(SourceFrequencyPlanner().makePlan(from: result))
+
+        #expect(abs(tone.frequencyHz - frequency) < 0.25)
+        #expect(
+          plan.targetBands.contains { abs($0.centerFrequencyHz - frequency) < 0.25 }
+        )
+      }
     }
   }
 

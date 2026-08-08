@@ -7,15 +7,30 @@ struct HistoryView: View {
     Group {
       if appModel.completedSpatialScans.isEmpty,
         appModel.completedComparisons.isEmpty,
+        appModel.completedSourceInvestigations.isEmpty,
         appModel.completedAnalyses.isEmpty
       {
         ContentUnavailableView(
           "还没有保存的调查",
           systemImage: "clock.arrow.circlepath",
-          description: Text("完成一次声音检查、空间扫描或前后对比后，可以在这里查看。")
+          description: Text("完成一次声音检查、状态调查、空间扫描或前后对比后，可以在这里查看。")
         )
       } else {
         List {
+          if !appModel.completedSourceInvestigations.isEmpty {
+            Section("状态调查") {
+              ForEach(
+                appModel.completedSourceInvestigations.sorted(by: { $0.measuredAt > $1.measuredAt })
+              ) { investigation in
+                NavigationLink(
+                  value: AppModel.Route.sourceInvestigationDetails(
+                    investigationID: investigation.id)
+                ) {
+                  SourceInvestigationHistoryRow(investigation: investigation)
+                }
+              }
+            }
+          }
           if !appModel.completedComparisons.isEmpty {
             Section("前后对比") {
               ForEach(appModel.completedComparisons.sorted(by: { $0.measuredAt > $1.measuredAt })) {
@@ -64,8 +79,44 @@ struct HistoryView: View {
       }
     ).union(
       appModel.completedComparisons.flatMap { [$0.beforeID, $0.afterID] }
+    ).union(
+      appModel.completedSourceInvestigations.flatMap { investigation in
+        investigation.measurements.map(\.analysis.id)
+      }
     )
     return appModel.completedAnalyses.filter { !nestedIDs.contains($0.id) }
+  }
+}
+
+private struct SourceInvestigationHistoryRow: View {
+  let investigation: SourceInvestigationEvaluation
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Image(systemName: "switch.2").foregroundStyle(AppTheme.accent)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(investigation.resultPresentation.title).font(.headline)
+        Text(
+          "\(investigation.subjectName)：\(investigation.baselineStateName) / \(investigation.changedStateName)"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        if let band = investigation.strongestSynchronizedBand,
+          let delta = band.meanChangedDeltaDB
+        {
+          Text("约 \(Int(band.frequencyHz.rounded())) Hz · \(signed(delta))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        Text(investigation.measuredAt, format: .dateTime.year().month().day().hour().minute())
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private func signed(_ value: Double) -> String {
+    "\(value >= 0 ? "+" : "")\(value.formatted(.number.precision(.fractionLength(1)))) dB"
   }
 }
 
