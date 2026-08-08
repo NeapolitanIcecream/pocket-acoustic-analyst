@@ -1,4 +1,4 @@
-# Pocket Acoustic Analyst
+# Pocket Acoustic Analyst（声音调查助手）
 
 一款面向非声学专业人士的 iOS 现场声音调查工具。它以“我听到持续嗡声”等实际问题作为入口，引导用户完成测量、解释、空间复测和调整验证。
 
@@ -7,23 +7,37 @@
 - 发现主要低频和可能的谐波；
 - 判断音调是否持续、测量是否可靠；
 - 结合 ARKit 记录房间中的实际测量点；
-- 从合格实测点中推荐相对较安静的位置；
+- 从合格且目标声仍可验证的实测点中找到目标声音较低的位置；
 - 比较调整前后，同时拒绝不可比的测量。
 
-应用默认只报告同一设备、同一会话内的相对变化。它不是校准声级计，也不会把频谱特征表述为确定的声源诊断。
+应用只报告同一设备、同一测量配置下的相对变化。它不是校准声级计，也不会根据频率特征确定声源或房间驻波。单部手机无法完全排除扫描期间的声源变化或声学低谷附近的复位误差，因此空间和前后结论的可信度最高为中等。
 
 ## 开发
 
-要求 Xcode 26、iOS 18 SDK 和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)。
+需要 Xcode 26、[XcodeGen 2.46.0](https://github.com/yonaskolb/XcodeGen/releases/tag/2.46.0) 或更高版本。应用的最低运行系统是 iOS 17。
 
 ```sh
 make bootstrap
 make build
+make test-core
 make test
+make analyze
+make lint
 ```
 
-架构、验收条件和当前证据记录在 [docs/SPRINT.md](docs/SPRINT.md)。
+`make test` 默认使用 iPhone 16 Pro / iOS 18.6 模拟器。可通过 `SIMULATOR_DESTINATION` 覆盖：
+
+```sh
+make test SIMULATOR_DESTINATION='platform=iOS Simulator,name=iPhone 17 Pro,OS=latest'
+```
+
+文档：
+
+- [架构与测量不变量](docs/ARCHITECTURE.md)
+- [依赖选型](docs/DEPENDENCIES.md)
+- [测试与真机验证](docs/TESTING.md)
+- [研究契约、进度与证据](docs/SPRINT.md)
 
 ## 隐私
 
-录音只在用户主动测量时采集。P0 在设备上分析并本地保存结果，不包含账号、云上传或遥测。
+录音只在用户主动测量时采集。P0 在设备上分析，只在本地保存分析、位置扫描和前后对比结果；不保存原始录音，不包含账号、云上传或遥测。
