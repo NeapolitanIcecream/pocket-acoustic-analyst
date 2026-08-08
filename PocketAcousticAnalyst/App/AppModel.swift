@@ -1,6 +1,23 @@
 import Foundation
 import Observation
 
+struct AppRuntimeConfiguration: Equatable, Sendable {
+  let usesDemoAudio: Bool
+  let usesDemoPoseTracking: Bool
+  let usesInMemoryRepository: Bool
+  let pacesDemoCaptureInRealTime: Bool
+
+  init(arguments: [String]) {
+    let isUITesting = arguments.contains("-uiTesting")
+    let isDemoMode = arguments.contains("-demoMode")
+    let isRealPoseTest = isUITesting && arguments.contains("-realPoseTest")
+    usesDemoAudio = isDemoMode || isRealPoseTest
+    usesDemoPoseTracking = isDemoMode
+    usesInMemoryRepository = isDemoMode || isUITesting
+    pacesDemoCaptureInRealTime = isRealPoseTest
+  }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -21,6 +38,7 @@ final class AppModel {
   @ObservationIgnored let audioCapture: any AudioCaptureClient
   @ObservationIgnored let analyzer: LowFrequencyAnalyzer
   @ObservationIgnored let isDemoMode: Bool
+  @ObservationIgnored let usesDemoPoseTracking: Bool
   @ObservationIgnored private let repository: any InvestigationRepository
   @ObservationIgnored private var didLoadHistory = false
   @ObservationIgnored private var persistenceTask: Task<Void, Never>?
@@ -31,16 +49,21 @@ final class AppModel {
     isDemoMode: Bool? = nil,
     repository: (any InvestigationRepository)? = nil
   ) {
-    let requestedDemoMode = isDemoMode ?? ProcessInfo.processInfo.arguments.contains("-demoMode")
+    let runtime = AppRuntimeConfiguration(arguments: ProcessInfo.processInfo.arguments)
+    let requestedDemoMode = isDemoMode ?? runtime.usesDemoAudio
     self.isDemoMode = requestedDemoMode
+    usesDemoPoseTracking = isDemoMode ?? runtime.usesDemoPoseTracking
     self.analyzer = analyzer
     self.repository =
       repository
-      ?? (requestedDemoMode ? InMemoryInvestigationRepository() : LocalInvestigationRepository())
+      ?? (runtime.usesInMemoryRepository || requestedDemoMode
+        ? InMemoryInvestigationRepository() : LocalInvestigationRepository())
     if let audioCapture {
       self.audioCapture = audioCapture
     } else if requestedDemoMode {
-      self.audioCapture = DemoAudioCaptureClient()
+      self.audioCapture = DemoAudioCaptureClient(
+        stepDelay: runtime.pacesDemoCaptureInRealTime ? .seconds(2) : .milliseconds(35)
+      )
     } else {
       self.audioCapture = AVAudioCaptureClient()
     }

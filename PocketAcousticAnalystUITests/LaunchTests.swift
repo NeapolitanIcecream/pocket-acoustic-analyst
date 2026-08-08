@@ -78,6 +78,131 @@ final class LaunchTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["两次测量不能可靠比较"].exists)
   }
 
+  #if !targetEnvironment(simulator)
+    func testRealDeviceCompletesAmbientAudioCapture() {
+      let app = XCUIApplication()
+      app.launchArguments = ["-uiTesting"]
+      addUIInterruptionMonitor(withDescription: "System permissions") { alert in
+        for label in ["允许", "Allow", "允许在使用 App 时", "Allow While Using App"] {
+          let button = alert.buttons[label]
+          if button.exists {
+            button.tap()
+            return true
+          }
+        }
+        return false
+      }
+      app.launch()
+
+      tap(app.buttons["startHumInvestigation"], in: app)
+      tap(app.buttons["requestMicrophonePermission"], in: app)
+      tap(app.buttons["startMeasurement"], in: app)
+
+      let finalResult = app.staticTexts.matching(
+        NSPredicate(
+          format: "label IN %@",
+          ["检测到持续低频声音", "这次没有找到持续音调", "这次测量不能使用"]
+        )
+      ).firstMatch
+      XCTAssertTrue(finalResult.waitForExistence(timeout: 45))
+
+      let resultAttachment = XCTAttachment(screenshot: app.screenshot())
+      resultAttachment.name = "Real device ambient capture result"
+      resultAttachment.lifetime = .keepAlways
+      add(resultAttachment)
+
+      if app.staticTexts["这次测量不能使用"].exists {
+        let labels = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
+        XCTFail("Real-device capture was invalid: \(labels)")
+        return
+      }
+
+      let details = app.buttons["查看测量依据"]
+      XCTAssertTrue(details.waitForExistence(timeout: 5))
+      details.tap()
+      let sampleRate = app.staticTexts.matching(
+        NSPredicate(format: "label BEGINSWITH %@", "实际采样率：")
+      ).firstMatch
+      let microphone = app.staticTexts.matching(
+        NSPredicate(format: "label BEGINSWITH %@", "麦克风：")
+      ).firstMatch
+      let channels = app.staticTexts.matching(
+        NSPredicate(format: "label BEGINSWITH %@", "输入通道：")
+      ).firstMatch
+      XCTAssertTrue(sampleRate.waitForExistence(timeout: 5))
+      XCTAssertTrue(microphone.exists)
+      XCTAssertTrue(channels.exists)
+
+      let metadataAttachment = XCTAttachment(
+        string: [sampleRate.label, microphone.label, channels.label].joined(separator: "\n")
+      )
+      metadataAttachment.name = "Real device capture metadata"
+      metadataAttachment.lifetime = .keepAlways
+      add(metadataAttachment)
+    }
+
+    func testRealDeviceCapturesARTrackedOrigin() {
+      let app = XCUIApplication()
+      app.launchArguments = ["-uiTesting", "-realPoseTest"]
+      addUIInterruptionMonitor(withDescription: "System permissions") { alert in
+        for label in ["允许", "Allow", "允许在使用 App 时", "Allow While Using App"] {
+          let button = alert.buttons[label]
+          if button.exists {
+            button.tap()
+            return true
+          }
+        }
+        return false
+      }
+      app.launch()
+
+      tap(app.buttons["startHumInvestigation"], in: app)
+      tap(app.buttons["requestMicrophonePermission"], in: app)
+      tap(app.buttons["startMeasurement"], in: app)
+      let detected = app.staticTexts["检测到持续低频声音"]
+      if !detected.waitForExistence(timeout: 45) {
+        let labels = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
+        XCTFail("Deterministic AR reference capture did not produce a stable tone: \(labels)")
+        return
+      }
+
+      tap(app.buttons["startSpatialScan"], in: app)
+      tap(app.buttons["startPositionTracking"], in: app)
+      let captureOrigin = app.buttons["captureSpatialPoint"]
+      if !captureOrigin.waitForExistence(timeout: 3) {
+        app.tap()
+      }
+      XCTAssertTrue(captureOrigin.waitForExistence(timeout: 15))
+      captureOrigin.tap()
+      XCTAssertTrue(app.staticTexts["正在测量，请保持手机不动"].waitForExistence(timeout: 5))
+
+      let accepted = app.staticTexts["移动到下一个位置"]
+      let rejected = app.staticTexts["这个点没有加入比较"]
+      let originOutcome = app.staticTexts.matching(
+        NSPredicate(format: "label IN %@", ["移动到下一个位置", "这个点没有加入比较"])
+      ).firstMatch
+      XCTAssertTrue(originOutcome.waitForExistence(timeout: 45))
+
+      let attachment = XCTAttachment(screenshot: app.screenshot())
+      attachment.name = "Real device AR-tracked origin"
+      attachment.lifetime = .keepAlways
+      add(attachment)
+
+      if rejected.exists {
+        let labels = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
+        let diagnostic = XCTAttachment(string: labels)
+        diagnostic.name = "Rejected AR origin diagnostic"
+        diagnostic.lifetime = .keepAlways
+        add(diagnostic)
+        XCTFail(
+          "AR initialized and recorded the origin, but the measurement was rejected: \(labels)")
+        return
+      }
+
+      XCTAssertTrue(accepted.exists)
+    }
+  #endif
+
   private func tap(_ element: XCUIElement, in app: XCUIApplication) {
     XCTAssertTrue(element.waitForExistence(timeout: 8))
     for _ in 0..<4 where !element.isHittable {

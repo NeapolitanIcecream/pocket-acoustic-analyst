@@ -73,6 +73,12 @@ struct AudioCaptureCompleteness: Sendable {
   }
 }
 
+struct AudioRouteContinuity: Sendable {
+  static func hasChanged(from startingRouteID: String, to currentRouteID: String) -> Bool {
+    startingRouteID != currentRouteID
+  }
+}
+
 @MainActor
 protocol AudioCaptureClient: AnyObject {
   var permission: MicrophonePermission { get }

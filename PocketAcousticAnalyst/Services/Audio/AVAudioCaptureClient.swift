@@ -8,6 +8,7 @@ final class AVAudioCaptureClient: AudioCaptureClient {
     let id: UUID
     let engine: AVAudioEngine
     let accumulator: AudioSampleAccumulator
+    let inputRouteID: String
     var invalidation: AudioCaptureError?
   }
 
@@ -77,9 +78,10 @@ final class AVAudioCaptureClient: AudioCaptureClient {
     let accumulator = AudioSampleAccumulator(
       expectedSampleCount: Int(ceil(format.sampleRate * durationSeconds))
     )
-    inputNode.installTap(onBus: 0, bufferSize: 2_048, format: format) { buffer, time in
+    let tapHandler: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { buffer, time in
       accumulator.append(buffer, at: time)
     }
+    inputNode.installTap(onBus: 0, bufferSize: 2_048, format: format, block: tapHandler)
 
     do {
       engine.prepare()
@@ -90,8 +92,13 @@ final class AVAudioCaptureClient: AudioCaptureClient {
       throw AudioCaptureError.engineStartFailed(error.localizedDescription)
     }
 
-    activeCapture = ActiveCapture(id: id, engine: engine, accumulator: accumulator)
     let route = currentInputRoute()
+    activeCapture = ActiveCapture(
+      id: id,
+      engine: engine,
+      accumulator: accumulator,
+      inputRouteID: route.id
+    )
     let startedAt = Date.now
 
     defer {
@@ -186,7 +193,7 @@ extension AVAudioCaptureClient {
       center.addObserver(
         forName: AVAudioSession.routeChangeNotification, object: session, queue: .main
       ) { [weak self] _ in
-        Task { @MainActor [weak self] in self?.invalidateActiveCapture(.routeChanged) }
+        Task { @MainActor [weak self] in self?.handleRouteChange() }
       },
       center.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) {
         [weak self] _ in
@@ -210,6 +217,16 @@ extension AVAudioCaptureClient {
     guard activeCapture != nil else { return }
     activeCapture?.invalidation = reason
     activeCapture?.engine.stop()
+  }
+
+  fileprivate func handleRouteChange() {
+    guard let activeCapture,
+      AudioRouteContinuity.hasChanged(
+        from: activeCapture.inputRouteID,
+        to: currentInputRoute().id
+      )
+    else { return }
+    invalidateActiveCapture(.routeChanged)
   }
 
   fileprivate func stopCapture(id: UUID) {

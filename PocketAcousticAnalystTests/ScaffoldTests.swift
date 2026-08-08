@@ -46,6 +46,33 @@ struct ScaffoldTests {
     #expect(!tracker.isContinuous)
   }
 
+  @Test func delayedNotificationDoesNotInvalidateAnUnchangedAudioRoute() {
+    #expect(!AudioRouteContinuity.hasChanged(from: "built-in:primary", to: "built-in:primary"))
+    #expect(AudioRouteContinuity.hasChanged(from: "built-in:primary", to: "usb:channel-0"))
+  }
+
+  @Test func realPoseUITestUsesDeterministicAudioWithoutReplacingARTracking() {
+    let configuration = AppRuntimeConfiguration(arguments: [
+      "PocketAcousticAnalyst", "-uiTesting", "-realPoseTest",
+    ])
+
+    #expect(configuration.usesDemoAudio)
+    #expect(!configuration.usesDemoPoseTracking)
+    #expect(configuration.usesInMemoryRepository)
+    #expect(configuration.pacesDemoCaptureInRealTime)
+  }
+
+  @Test func realPoseTestModeCannotBeEnabledOutsideUITesting() {
+    let configuration = AppRuntimeConfiguration(arguments: [
+      "PocketAcousticAnalyst", "-realPoseTest",
+    ])
+
+    #expect(!configuration.usesDemoAudio)
+    #expect(!configuration.usesDemoPoseTracking)
+    #expect(!configuration.usesInMemoryRepository)
+    #expect(!configuration.pacesDemoCaptureInRealTime)
+  }
+
   @MainActor
   @Test func poseMonitorRemainsInvalidAfterPhoneMovesAwayAndReturns() {
     let epoch = UUID()

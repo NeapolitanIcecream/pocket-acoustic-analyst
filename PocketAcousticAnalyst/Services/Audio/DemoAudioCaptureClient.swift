@@ -4,6 +4,11 @@ import Foundation
 final class DemoAudioCaptureClient: AudioCaptureClient {
   private var captureCount = 0
   private var isCancelled = false
+  private let stepDelay: Duration
+
+  init(stepDelay: Duration = .milliseconds(35)) {
+    self.stepDelay = stepDelay
+  }
 
   var permission: MicrophonePermission { .granted }
 
@@ -15,7 +20,7 @@ final class DemoAudioCaptureClient: AudioCaptureClient {
   ) async throws -> CapturedAudio {
     isCancelled = false
     for step in 1...10 {
-      try await Task.sleep(for: .milliseconds(35))
+      try await Task.sleep(for: stepDelay)
       guard !isCancelled else { throw AudioCaptureError.cancelled }
       progress(Double(step) / 10)
     }

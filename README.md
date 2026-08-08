@@ -31,6 +31,17 @@ make lint
 make test SIMULATOR_DESTINATION='platform=iOS Simulator,name=iPhone 17 Pro,OS=latest'
 ```
 
+连接并信任 iPhone 后，可传入 Xcode 设备 ID 和开发团队运行真机自动化：
+
+```sh
+make test-device-core DEVICE_ID='<device-id>' DEVELOPMENT_TEAM='<team-id>'
+make test-device-demo-ui DEVICE_ID='<device-id>' DEVELOPMENT_TEAM='<team-id>'
+make test-device-audio DEVICE_ID='<device-id>' DEVELOPMENT_TEAM='<team-id>'
+make test-device-ar DEVICE_ID='<device-id>' DEVELOPMENT_TEAM='<team-id>'
+```
+
+真实麦克风与 AR 用例需要保持设备解锁；AR 用例还需要固定手机并让摄像头朝向有纹理的表面。设备标识和签名团队不会写入仓库。
+
 文档：
 
 - [架构与测量不变量](docs/ARCHITECTURE.md)

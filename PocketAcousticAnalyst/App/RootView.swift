@@ -21,7 +21,7 @@ struct RootView: View {
               SpatialScanView(
                 referenceAnalysis: analysis,
                 captureClient: appModel.audioCapture,
-                poseClient: appModel.isDemoMode
+                poseClient: appModel.usesDemoPoseTracking
                   ? DemoPoseTrackingClient()
                   : ARPoseTrackingClient(),
                 analyzer: appModel.analyzer
@@ -37,7 +37,7 @@ struct RootView: View {
             BeforeAfterView(
               referenceAnalysis: analysisID.flatMap { appModel.analysis(id: $0) },
               captureClient: appModel.audioCapture,
-              poseClient: appModel.isDemoMode
+              poseClient: appModel.usesDemoPoseTracking
                 ? DemoPoseTrackingClient(poses: [
                   SpatialCoordinate(x: 0, y: 0, z: 0),
                   SpatialCoordinate(x: 0.02, y: 0, z: 0),
