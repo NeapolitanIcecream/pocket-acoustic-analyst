@@ -189,6 +189,12 @@ final class BeforeAfterModel {
         return
       }
       if stage == .before {
+        if lockedTargetFrequencyHz == nil,
+          analysis.resolvedSoundPattern != .stableTone
+        {
+          phase = .invalid(.targetNotStable)
+          return
+        }
         guard let tone = analysis.tone, tone.isStable, tone.confidence != .low else {
           phase = .invalid(.targetNotStable)
           return

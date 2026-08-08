@@ -36,7 +36,9 @@ struct HistoryView: View {
             Section("声音检查") {
               ForEach(standaloneAnalyses.sorted(by: { $0.measuredAt > $1.measuredAt })) {
                 analysis in
-                AnalysisHistoryRow(analysis: analysis)
+                NavigationLink(value: AppModel.Route.analysisDetails(analysisID: analysis.id)) {
+                  AnalysisHistoryRow(analysis: analysis)
+                }
               }
             }
           }
@@ -74,8 +76,11 @@ private struct AnalysisHistoryRow: View {
     HStack(spacing: 12) {
       Image(systemName: "waveform").foregroundStyle(AppTheme.accent)
       VStack(alignment: .leading, spacing: 4) {
-        Text(analysis.tone.map { "约 \(Int($0.frequencyHz.rounded())) Hz 的持续声音" } ?? "未找到持续音调")
+        Text(analysis.resultPresentation.title)
           .font(.headline)
+        Text(analysis.resultPresentation.subtitle)
+          .font(.caption)
+          .foregroundStyle(.secondary)
         Text(analysis.measuredAt, format: .dateTime.year().month().day().hour().minute())
           .font(.caption)
           .foregroundStyle(.secondary)

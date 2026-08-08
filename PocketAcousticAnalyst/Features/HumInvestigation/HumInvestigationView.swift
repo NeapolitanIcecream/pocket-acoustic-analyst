@@ -191,20 +191,23 @@ struct HumInvestigationView: View {
 
   private func detectedResult(_ analysis: AcousticAnalysis) -> some View {
     let tone = analysis.tone!
+    let presentation = analysis.resultPresentation
     return VStack(alignment: .leading, spacing: 22) {
       ResultStatusHeader(
         icon: "checkmark.circle.fill",
         color: AppTheme.accent,
-        title: "检测到持续低频声音",
-        subtitle:
-          "主要集中在约 \(AcousticResultFormatter.frequency(tone.frequencyHz, analysis: analysis))"
+        title: presentation.title,
+        subtitle: presentation.subtitle
       )
       .accessibilityIdentifier("detectedToneResult")
 
-      ToneContinuityView(tone: tone)
+      ToneContinuityView(
+        tone: tone,
+        minimumPersistence: analysis.configuration.minimumTonePersistence
+      )
 
       EvidenceSection(title: "这次测到了什么") {
-        Text("这个低频在大多数测量时段都出现，频率和强弱变化在本次可用范围内。")
+        Text(presentation.evidence)
         if !tone.harmonics.isEmpty {
           Text(
             "还发现了约 \(tone.harmonics.map { AcousticResultFormatter.wholeFrequency($0.frequencyHz) }.joined(separator: "、")) 的倍数频率。"
@@ -212,10 +215,10 @@ struct HumInvestigationView: View {
         }
       }
       EvidenceSection(title: "这能支持什么判断") {
-        Text("这个声音适合继续比较房间里的不同实测位置。")
+        Text(presentation.action)
       }
       EvidenceSection(title: "还不能说明什么") {
-        Text("仅凭这次录音不能确定是哪台设备，也不能确认房间驻波或传播路径。")
+        Text(presentation.limitation)
       }
 
       Button("寻找影响较小的位置") {
@@ -232,20 +235,33 @@ struct HumInvestigationView: View {
   }
 
   private func notDetectedResult(_ analysis: AcousticAnalysis) -> some View {
-    VStack(alignment: .leading, spacing: 22) {
+    let presentation = analysis.resultPresentation
+    return VStack(alignment: .leading, spacing: 22) {
       ResultStatusHeader(
-        icon: "waveform.slash",
+        icon: analysis.resolvedSoundPattern == .distributedEnergy ? "waveform.slash" : "waveform",
         color: .orange,
-        title: "这次没有找到持续音调",
-        subtitle: analysis.tone == nil
-          ? "声音可能不够明显，或主要是随时间变化的环境声。"
-          : "检测到的低频变化较大，不适合继续做位置比较。"
+        title: presentation.title,
+        subtitle: presentation.subtitle
       )
-      EvidenceSection(title: "这不代表什么") {
-        Text("结果只说明这次测量没有找到可重复的持续音调，不代表这里没有低频声音。")
+      if let evidenceTone = analysis.bestToneEvidence {
+        ToneContinuityView(
+          tone: evidenceTone,
+          minimumPersistence: analysis.configuration.minimumTonePersistence
+        )
+      }
+      EvidenceSection(title: "这次测到了什么") {
+        Text(presentation.evidence)
+        if let evidenceTone = analysis.bestToneEvidence, !evidenceTone.harmonics.isEmpty {
+          Text(
+            "还发现了约 \(evidenceTone.harmonics.map { AcousticResultFormatter.wholeFrequency($0.frequencyHz) }.joined(separator: "、")) 的倍数频率。"
+          )
+        }
+      }
+      EvidenceSection(title: "为什么暂时不能比较位置") {
+        Text(presentation.limitation)
       }
       EvidenceSection(title: "可以怎么做") {
-        Text("在嗡声最明显时重测，并确认手机没有被衣物或床品遮挡。")
+        Text(presentation.action)
       }
       Button("重新测量") { model.retry() }
         .buttonStyle(PrimaryButtonStyle())
@@ -290,6 +306,19 @@ struct HumInvestigationView: View {
           Text("麦克风：\(inputRouteName)")
         }
         Text("输入通道：\(analysis.inputChannelCount) 个，分析第 \(analysis.selectedInputChannelIndex + 1) 个")
+        Text("声音类型：\(analysis.resultPresentation.title)")
+        if let evidenceTone = analysis.bestToneEvidence {
+          Text(
+            "候选频率：\(AcousticResultFormatter.frequency(evidenceTone.frequencyHz, analysis: analysis))"
+          )
+          Text("出现时段：\(Int((evidenceTone.persistence * 100).rounded()))%")
+          Text(
+            "频率变化：\(evidenceTone.frequencySpreadHz.formatted(.number.precision(.fractionLength(2)))) Hz"
+          )
+          Text(
+            "强弱离散：\(evidenceTone.levelSpreadDB.formatted(.number.precision(.fractionLength(1)))) dB"
+          )
+        }
         Text("结果可信度：\(combinedConfidence(for: analysis).userLabel)")
       }
       .font(.footnote)
@@ -299,7 +328,7 @@ struct HumInvestigationView: View {
   }
 
   private func combinedConfidence(for analysis: AcousticAnalysis) -> AnalysisConfidence {
-    analysis.tone?.confidence.constrained(by: analysis.quality.confidence)
+    analysis.bestToneEvidence?.confidence.constrained(by: analysis.quality.confidence)
       ?? analysis.quality.confidence
   }
 
@@ -357,7 +386,12 @@ private struct ResultStatusHeader: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Image(systemName: icon).font(.system(size: 44)).foregroundStyle(color)
-      Text(title).font(.largeTitle.bold())
+      Text(title)
+        .font(.largeTitle.bold())
+        .lineLimit(2)
+        .minimumScaleFactor(0.85)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
       Text(subtitle).font(.title3).foregroundStyle(.secondary)
     }
   }
@@ -380,6 +414,14 @@ private struct EvidenceSection<Content: View>: View {
 
 private struct ToneContinuityView: View {
   let tone: ToneAnalysis
+  let minimumPersistence: Double
+
+  private var summary: String {
+    if tone.persistence < minimumPersistence {
+      return "只在部分时段检测到候选音调"
+    }
+    return tone.isStable ? "多数时段都能重复测到" : "频率或强弱随时间有明显变化"
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -394,14 +436,14 @@ private struct ToneContinuityView: View {
         }
       }
       .frame(height: 42)
-      Text(tone.isStable ? "多数时段都能重复测到" : "声音随时间有明显变化")
+      Text(summary)
         .font(.subheadline)
         .foregroundStyle(.secondary)
     }
     .padding(16)
     .background(AppTheme.cardBackground, in: RoundedRectangle(cornerRadius: 18))
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(tone.isStable ? "多数时段都能重复测到" : "声音随时间有明显变化")")
+    .accessibilityLabel(summary)
   }
 }
 

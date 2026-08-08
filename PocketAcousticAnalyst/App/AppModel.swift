@@ -6,6 +6,7 @@ struct AppRuntimeConfiguration: Equatable, Sendable {
   let usesDemoPoseTracking: Bool
   let usesInMemoryRepository: Bool
   let pacesDemoCaptureInRealTime: Bool
+  let demoAudioProfile: DemoAudioProfile
 
   init(arguments: [String]) {
     let isUITesting = arguments.contains("-uiTesting")
@@ -15,6 +16,9 @@ struct AppRuntimeConfiguration: Equatable, Sendable {
     usesDemoPoseTracking = isDemoMode
     usesInMemoryRepository = isDemoMode || isUITesting
     pacesDemoCaptureInRealTime = isRealPoseTest
+    demoAudioProfile =
+      isDemoMode && arguments.contains("-intermittentDemo")
+      ? .intermittentTone : .stableTone
   }
 }
 
@@ -26,6 +30,7 @@ final class AppModel {
     case spatialScan(analysisID: UUID)
     case comparison(analysisID: UUID?)
     case history
+    case analysisDetails(analysisID: UUID)
     case aboutMeasurement
   }
 
@@ -62,7 +67,8 @@ final class AppModel {
       self.audioCapture = audioCapture
     } else if requestedDemoMode {
       self.audioCapture = DemoAudioCaptureClient(
-        stepDelay: runtime.pacesDemoCaptureInRealTime ? .seconds(2) : .milliseconds(35)
+        stepDelay: runtime.pacesDemoCaptureInRealTime ? .seconds(2) : .milliseconds(35),
+        profile: runtime.demoAudioProfile
       )
     } else {
       self.audioCapture = AVAudioCaptureClient()

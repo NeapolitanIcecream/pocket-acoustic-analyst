@@ -34,6 +34,38 @@ final class LaunchTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["这次测量不能使用"].exists)
   }
 
+  func testIntermittentDemoExplainsTheEvidenceAndOpensHistoryDetails() {
+    let app = XCUIApplication()
+    app.launchArguments = ["-uiTesting", "-demoMode", "-intermittentDemo"]
+    app.launch()
+
+    tap(app.buttons["startHumInvestigation"], in: app)
+    tap(app.buttons["requestMicrophonePermission"], in: app)
+    tap(app.buttons["startMeasurement"], in: app)
+
+    XCTAssertTrue(app.staticTexts["检测到间歇出现的低频音调"].waitForExistence(timeout: 20))
+    XCTAssertTrue(
+      app.staticTexts.matching(
+        NSPredicate(format: "label CONTAINS %@", "时段出现")
+      ).firstMatch.exists)
+    XCTAssertFalse(app.buttons["startSpatialScan"].exists)
+    XCTAssertTrue(app.staticTexts["为什么暂时不能比较位置"].exists)
+    XCTAssertTrue(app.staticTexts["只在部分时段检测到候选音调"].exists)
+
+    let back = app.navigationBars.buttons.firstMatch
+    XCTAssertTrue(back.waitForExistence(timeout: 5))
+    back.tap()
+    tap(app.buttons["historyButton"], in: app)
+    let record = app.staticTexts["检测到间歇出现的低频音调"]
+    XCTAssertTrue(record.waitForExistence(timeout: 5))
+    record.tap()
+    XCTAssertTrue(app.staticTexts["候选声音依据"].waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      app.staticTexts.matching(
+        NSPredicate(format: "label BEGINSWITH %@", "出现时段：")
+      ).firstMatch.exists)
+  }
+
   func testDemoCompletesMeasuredPointScanWithOriginClosure() {
     let app = XCUIApplication()
     app.launchArguments = ["-uiTesting", "-demoMode"]
@@ -101,7 +133,16 @@ final class LaunchTests: XCTestCase {
       let finalResult = app.staticTexts.matching(
         NSPredicate(
           format: "label IN %@",
-          ["检测到持续低频声音", "这次没有找到持续音调", "这次测量不能使用"]
+          [
+            "检测到持续低频声音",
+            "检测到短暂出现的低频音调",
+            "检测到间歇出现的低频音调",
+            "检测到频率变化的低频音调",
+            "检测到强弱变化明显的低频音调",
+            "检测到多个低频音调",
+            "低频能量没有集中在单一频率",
+            "这次测量不能使用",
+          ]
         )
       ).firstMatch
       XCTAssertTrue(finalResult.waitForExistence(timeout: 45))
@@ -115,6 +156,9 @@ final class LaunchTests: XCTestCase {
         let labels = app.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
         XCTFail("Real-device capture was invalid: \(labels)")
         return
+      }
+      if finalResult.label != "检测到持续低频声音" {
+        XCTAssertFalse(app.buttons["startSpatialScan"].exists)
       }
 
       let details = app.buttons["查看测量依据"]
@@ -133,12 +177,49 @@ final class LaunchTests: XCTestCase {
       XCTAssertTrue(microphone.exists)
       XCTAssertTrue(channels.exists)
 
+      let evidencePrefixes = [
+        "声音类型：",
+        "候选频率：",
+        "出现时段：",
+        "频率变化：",
+        "强弱离散：",
+        "结果可信度：",
+      ]
+      let evidenceLabels = evidencePrefixes.compactMap { prefix -> String? in
+        let element = app.staticTexts.matching(
+          NSPredicate(format: "label BEGINSWITH %@", prefix)
+        ).firstMatch
+        return element.exists ? element.label : nil
+      }
+      let resultDetailPrefixes = [
+        "主要集中在约",
+        "主要包括约",
+        "候选频率约",
+        "主要在约",
+        "主要频率约",
+        "这次没有可锁定",
+      ]
+      let resultDetails = resultDetailPrefixes.compactMap { prefix -> String? in
+        let element = app.staticTexts.matching(
+          NSPredicate(format: "label BEGINSWITH %@", prefix)
+        ).firstMatch
+        return element.exists ? element.label : nil
+      }
+      let harmonicEvidence = app.staticTexts.matching(
+        NSPredicate(format: "label CONTAINS %@", "倍数频率")
+      ).firstMatch
+      let additionalEvidence = harmonicEvidence.exists ? [harmonicEvidence.label] : []
+      let summary =
+        ([finalResult.label, sampleRate.label, microphone.label, channels.label] + evidenceLabels
+        + resultDetails + additionalEvidence)
+        .joined(separator: "\n")
       let metadataAttachment = XCTAttachment(
-        string: [sampleRate.label, microphone.label, channels.label].joined(separator: "\n")
+        string: summary
       )
-      metadataAttachment.name = "Real device capture metadata"
+      metadataAttachment.name = "Real device ambient analysis summary"
       metadataAttachment.lifetime = .keepAlways
       add(metadataAttachment)
+      print("REAL_AMBIENT_ANALYSIS_BEGIN\n\(summary)\nREAL_AMBIENT_ANALYSIS_END")
     }
 
     func testRealDeviceCapturesARTrackedOrigin() {

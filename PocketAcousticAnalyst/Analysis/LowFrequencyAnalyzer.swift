@@ -9,7 +9,7 @@ enum AcousticAnalysisError: Error, Equatable, Sendable {
 }
 
 struct LowFrequencyAnalyzer: Sendable {
-  static let version = "low-frequency-v3"
+  static let version = "low-frequency-v4"
   static let comparisonBandHalfWidthHz = 1.0
 
   let configuration: AnalysisConfiguration
@@ -130,15 +130,18 @@ struct LowFrequencyAnalyzer: Sendable {
       )
     }
 
-    var tone = detectTone(
+    let toneDetection = detectTone(
       averagePowers: averagePowers,
       framePowers: framePowers,
       minimumBin: transformMinimumBin,
       binSpacing: binSpacing,
       hopSeconds: Double(hopSampleCount) / sampleRate
     )
+    var tone = toneDetection.tone
+    var candidateTone = toneDetection.candidateTone
     let lockedBand = makeLockedBand(
-      centerFrequencyHz: comparisonTargetFrequencyHz ?? tone?.frequencyHz,
+      centerFrequencyHz:
+        comparisonTargetFrequencyHz ?? tone?.frequencyHz ?? candidateTone?.frequencyHz,
       halfWidthHz: comparisonBandHalfWidthHz,
       averagePowers: averagePowers,
       framePowers: framePowers,
@@ -149,6 +152,9 @@ struct LowFrequencyAnalyzer: Sendable {
       tone?.independentBlockLevelsDB = lockedBand.independentBlockLevelsDB
       tone?.independentBlockBandCenterFrequencyHz = lockedBand.centerFrequencyHz
       tone?.independentBlockBandHalfWidthHz = lockedBand.halfWidthHz
+      candidateTone?.independentBlockLevelsDB = lockedBand.independentBlockLevelsDB
+      candidateTone?.independentBlockBandCenterFrequencyHz = lockedBand.centerFrequencyHz
+      candidateTone?.independentBlockBandHalfWidthHz = lockedBand.halfWidthHz
     }
 
     let lowFrequencyPower = broadbandIndices.reduce(0.0) { $0 + averagePowers[$1] }
@@ -206,6 +212,8 @@ struct LowFrequencyAnalyzer: Sendable {
       spectrogramFrequenciesHz: spectrogramFrequencies,
       spectrogram: spectrogram,
       tone: tone,
+      candidateTone: candidateTone,
+      soundPattern: toneDetection.pattern,
       lockedBand: lockedBand,
       quality: quality(for: qualityIssues)
     )
@@ -227,20 +235,28 @@ extension LowFrequencyAnalyzer {
     var levelDB: Double
   }
 
+  fileprivate struct ToneDetection {
+    var tone: ToneAnalysis?
+    var candidateTone: ToneAnalysis?
+    var pattern: LowFrequencySoundPattern
+  }
+
   fileprivate func detectTone(
     averagePowers: [Double],
     framePowers: [[Double]],
     minimumBin: Int,
     binSpacing: Double,
     hopSeconds: Double
-  ) -> ToneAnalysis? {
+  ) -> ToneDetection {
     let peaks = findPeaks(
       powers: averagePowers,
       minimumBin: minimumBin,
       binSpacing: binSpacing,
       minimumProminenceDB: configuration.minimumToneProminenceDB
     )
-    guard !peaks.isEmpty else { return nil }
+    guard !peaks.isEmpty else {
+      return ToneDetection(tone: nil, candidateTone: nil, pattern: .distributedEnergy)
+    }
 
     let strongestLevel = peaks.map(\.levelDB).max() ?? -160
     let scored = peaks.map { peak -> (Peak, Double) in
@@ -251,7 +267,7 @@ extension LowFrequencyAnalyzer {
     }
     let primary = scored.max { $0.1 < $1.1 }?.0 ?? peaks[0]
 
-    let initialObservations = framePowers.enumerated().compactMap { frameIndex, powers in
+    let localObservations = framePowers.enumerated().compactMap { frameIndex, powers in
       frameObservation(
         frameIndex: frameIndex,
         powers: powers,
@@ -260,8 +276,16 @@ extension LowFrequencyAnalyzer {
         binSpacing: binSpacing
       )
     }
+    let driftingObservations = coherentDriftingObservations(
+      framePowers: framePowers,
+      minimumBin: minimumBin,
+      binSpacing: binSpacing
+    )
+    let initialObservations = driftingObservations ?? localObservations
+    guard !initialObservations.isEmpty else {
+      return ToneDetection(tone: nil, candidateTone: nil, pattern: .distributedEnergy)
+    }
     let persistence = Double(initialObservations.count) / Double(framePowers.count)
-    guard persistence >= configuration.minimumTonePersistence else { return nil }
 
     let frequencySpread = robustSpread(initialObservations.map(\.peak.frequencyHz))
     let targetHalfWidthHz = min(max(max(1, 3 * frequencySpread), 1), 3)
@@ -275,7 +299,7 @@ extension LowFrequencyAnalyzer {
       )
       return updated
     }
-    let levelSpread = robustSpread(observations.map(\.levelDB))
+    let levelSpread = standardDeviation(observations.map(\.levelDB))
     let stable =
       frequencySpread <= configuration.stableFrequencySpreadHz
       && levelSpread <= configuration.stableLevelSpreadDB
@@ -330,7 +354,7 @@ extension LowFrequencyAnalyzer {
         levelDB: observation?.levelDB
       )
     }
-    return ToneAnalysis(
+    let candidate = ToneAnalysis(
       frequencyHz: primary.frequencyHz,
       levelDB: targetLevel,
       prominenceDB: primary.prominenceDB,
@@ -343,6 +367,23 @@ extension LowFrequencyAnalyzer {
       independentBlockLevelsDB: [],
       isStable: stable,
       confidence: confidence
+    )
+    let pattern: LowFrequencySoundPattern
+    if persistence < configuration.minimumTonePersistence {
+      pattern = .intermittentTone
+    } else if !competitors.isEmpty {
+      pattern = .multipleTones
+    } else if frequencySpread > configuration.stableFrequencySpreadHz {
+      pattern = .driftingTone
+    } else if levelSpread > configuration.stableLevelSpreadDB {
+      pattern = .varyingLevelTone
+    } else {
+      pattern = .stableTone
+    }
+    return ToneDetection(
+      tone: persistence >= configuration.minimumTonePersistence ? candidate : nil,
+      candidateTone: persistence < configuration.minimumTonePersistence ? candidate : nil,
+      pattern: pattern
     )
   }
 
@@ -451,6 +492,49 @@ extension LowFrequencyAnalyzer {
       peak: peak,
       levelDB: bandLevel(powers: powers, centerIndex: index, halfWidthHz: 1, binSpacing: binSpacing)
     )
+  }
+
+  fileprivate func coherentDriftingObservations(
+    framePowers: [[Double]],
+    minimumBin: Int,
+    binSpacing: Double
+  ) -> [FrameObservation]? {
+    let observations: [FrameObservation] = framePowers.enumerated().compactMap {
+      pair -> FrameObservation? in
+      let (frameIndex, powers) = pair
+      guard
+        let peak = findPeaks(
+          powers: powers,
+          minimumBin: minimumBin,
+          binSpacing: binSpacing,
+          minimumProminenceDB: configuration.minimumFrameProminenceDB
+        ).first
+      else { return nil }
+      return FrameObservation(
+        frameIndex: frameIndex,
+        peak: peak,
+        levelDB: bandLevel(
+          powers: powers,
+          centerIndex: peak.index,
+          halfWidthHz: 1,
+          binSpacing: binSpacing
+        )
+      )
+    }
+    let persistence = Double(observations.count) / Double(framePowers.count)
+    guard persistence >= configuration.minimumTonePersistence,
+      robustSpread(observations.map(\.peak.frequencyHz))
+        > configuration.stableFrequencySpreadHz
+    else { return nil }
+
+    let maximumStepHz = max(2.5, 7 * binSpacing)
+    let isContinuous = zip(observations, observations.dropFirst()).allSatisfy { pair in
+      let (before, after) = pair
+      let frameGap = max(1, after.frameIndex - before.frameIndex)
+      return abs(after.peak.frequencyHz - before.peak.frequencyHz)
+        <= maximumStepHz * Double(frameGap)
+    }
+    return isContinuous ? observations : nil
   }
 
   fileprivate func interpolatedPeak(

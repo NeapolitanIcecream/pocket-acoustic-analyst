@@ -71,6 +71,20 @@ struct MeasurementQuality: Codable, Equatable, Sendable {
       && !issues.contains(.mediaServicesReset) && !issues.contains(.appBackgrounded)
   }
 
+  var isUsableForSoundCharacterization: Bool {
+    let blockingIssues: Set<MeasurementQualityIssue> = [
+      .inputTooQuiet,
+      .clipping,
+      .externalInterruption,
+      .insufficientDuration,
+      .routeChanged,
+      .engineConfigurationChanged,
+      .mediaServicesReset,
+      .appBackgrounded,
+    ]
+    return issues.isDisjoint(with: blockingIssues)
+  }
+
   var confidence: AnalysisConfidence {
     switch score {
     case 0.82...: .high
@@ -109,6 +123,15 @@ struct ToneFrameSample: Codable, Equatable, Sendable, Identifiable {
   var levelDB: Double?
 
   var id: Double { offsetSeconds }
+}
+
+enum LowFrequencySoundPattern: String, Codable, Equatable, Sendable {
+  case stableTone
+  case intermittentTone
+  case driftingTone
+  case varyingLevelTone
+  case multipleTones
+  case distributedEnergy
 }
 
 struct ToneAnalysis: Codable, Equatable, Sendable {
@@ -163,6 +186,8 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
   var spectrogramFrequenciesHz: [Double]
   var spectrogram: [SpectrogramSlice]
   var tone: ToneAnalysis?
+  var candidateTone: ToneAnalysis? = nil
+  var soundPattern: LowFrequencySoundPattern? = nil
   var lockedBand: LockedBandAnalysis?
   var quality: MeasurementQuality
 
@@ -185,6 +210,8 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
     spectrogramFrequenciesHz: [Double],
     spectrogram: [SpectrogramSlice],
     tone: ToneAnalysis?,
+    candidateTone: ToneAnalysis? = nil,
+    soundPattern: LowFrequencySoundPattern? = nil,
     lockedBand: LockedBandAnalysis? = nil,
     quality: MeasurementQuality
   ) {
@@ -206,7 +233,13 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
     self.spectrogramFrequenciesHz = spectrogramFrequenciesHz
     self.spectrogram = spectrogram
     self.tone = tone
+    self.candidateTone = candidateTone
+    self.soundPattern = soundPattern
     self.lockedBand = lockedBand
     self.quality = quality
+  }
+
+  var bestToneEvidence: ToneAnalysis? {
+    tone ?? candidateTone
   }
 }

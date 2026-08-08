@@ -111,11 +111,15 @@ final class HumInvestigationModel {
         )
       }.value
 
-      guard analysis.quality.isUsable else {
+      guard analysis.quality.isUsableForSoundCharacterization else {
         phase = .result(.invalid(.lowQuality(analysis.quality.issues)))
         return
       }
-      if let tone = analysis.tone, tone.isStable, tone.confidence != .low {
+      if analysis.soundPattern == .stableTone,
+        let tone = analysis.tone,
+        tone.isStable,
+        tone.confidence != .low
+      {
         phase = .result(.detected(analysis))
       } else {
         phase = .result(.notDetected(analysis))

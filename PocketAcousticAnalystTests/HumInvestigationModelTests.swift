@@ -56,6 +56,27 @@ struct HumInvestigationModelTests {
     }
     #expect(analysis.tone == nil)
     #expect(analysis.quality.isUsable)
+    #expect(analysis.soundPattern == .distributedEnergy)
+  }
+
+  @Test func changingSoundReturnsAnExplanationInsteadOfAnInvalidMeasurement() async {
+    let capture = StubAudioCaptureClient(result: .success(Self.changingLevelCapture()))
+    let model = HumInvestigationModel(
+      captureClient: capture,
+      analyzer: LowFrequencyAnalyzer(),
+      isDemoMode: true
+    )
+
+    await model.startMeasurement()
+
+    guard case .result(.notDetected(let analysis)) = model.phase else {
+      Issue.record(
+        "Expected an explained notDetected result, got \(String(describing: model.phase))")
+      return
+    }
+    #expect(analysis.soundPattern == .varyingLevelTone)
+    #expect(analysis.quality.issues.contains(.unstableEnvironment))
+    #expect(analysis.quality.isUsableForSoundCharacterization)
   }
 
   @Test func routeChangeProducesInvalidOutcomeInsteadOfAcousticResult() async {
@@ -128,6 +149,16 @@ extension HumInvestigationModelTests {
       state = state &* 6_364_136_223_846_793_005 &+ 1
       let normalized = Double(state >> 11) / Double(1 << 53)
       return Float((normalized * 2 - 1) * 0.06)
+    }
+    return capturedAudio(samples: samples, sampleRate: sampleRate)
+  }
+
+  fileprivate static func changingLevelCapture() -> CapturedAudio {
+    let sampleRate = 48_000.0
+    let samples = (0..<Int(sampleRate * 9)).map { index -> Float in
+      let time = Double(index) / sampleRate
+      let amplitude = time < 4.5 ? 0.12 : 0.03
+      return Float(amplitude * sin(2 * .pi * 53.17 * time))
     }
     return capturedAudio(samples: samples, sampleRate: sampleRate)
   }

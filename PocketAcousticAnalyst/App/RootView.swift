@@ -47,6 +47,16 @@ struct RootView: View {
             )
           case .history:
             HistoryView()
+          case .analysisDetails(let analysisID):
+            if let analysis = appModel.analysis(id: analysisID) {
+              AcousticAnalysisDetailView(analysis: analysis)
+            } else {
+              ContentUnavailableView(
+                "找不到测量记录",
+                systemImage: "exclamationmark.triangle",
+                description: Text("这条记录可能已被移除，请返回调查记录。")
+              )
+            }
           case .aboutMeasurement:
             MeasurementLimitsView()
           }

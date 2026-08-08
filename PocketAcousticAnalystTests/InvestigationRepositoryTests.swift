@@ -10,7 +10,12 @@ struct InvestigationRepositoryTests {
     let fileURL = directory.appendingPathComponent("archive.json", isDirectory: false)
     let repository = LocalInvestigationRepository(fileURL: fileURL)
     let analysis = Self.analysisFixture()
-    let archive = InvestigationArchive(analyses: [analysis])
+    var intermittent = analysis
+    intermittent.id = UUID()
+    intermittent.tone = nil
+    intermittent.candidateTone = analysis.tone
+    intermittent.soundPattern = .intermittentTone
+    let archive = InvestigationArchive(analyses: [analysis, intermittent])
 
     try await repository.save(archive)
     let loaded = try await repository.load()
@@ -20,8 +25,28 @@ struct InvestigationRepositoryTests {
     #expect(loaded.analyses.first?.id == analysis.id)
     #expect(loaded.analyses.first?.inputRouteName == "iPhone 麦克风 / 底部")
     #expect(loaded.analyses.first?.lockedBand?.centerFrequencyHz == 53.17)
+    #expect(loaded.analyses.last?.candidateTone?.frequencyHz == 53.17)
+    #expect(loaded.analyses.last?.soundPattern == .intermittentTone)
     #expect(!encodedText.contains("\"samples\""))
     #expect(encodedText.contains("\"schemaVersion\":1"))
+  }
+
+  @Test func archiveFromBeforeSoundPatternsStillDecodes() throws {
+    let archive = InvestigationArchive(analyses: [Self.analysisFixture()])
+    let encoded = try JSONEncoder().encode(archive)
+    var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    var analyses = try #require(root["analyses"] as? [[String: Any]])
+    analyses[0].removeValue(forKey: "candidateTone")
+    analyses[0].removeValue(forKey: "soundPattern")
+    root["analyses"] = analyses
+
+    let legacyData = try JSONSerialization.data(withJSONObject: root)
+    let decoded = try JSONDecoder().decode(InvestigationArchive.self, from: legacyData)
+    let analysis = try #require(decoded.analyses.first)
+
+    #expect(analysis.candidateTone == nil)
+    #expect(analysis.soundPattern == nil)
+    #expect(analysis.resolvedSoundPattern == .stableTone)
   }
 }
 
@@ -58,6 +83,7 @@ extension InvestigationRepositoryTests {
         isStable: true,
         confidence: .high
       ),
+      soundPattern: .stableTone,
       lockedBand: LockedBandAnalysis(
         centerFrequencyHz: 53.17,
         halfWidthHz: 1,

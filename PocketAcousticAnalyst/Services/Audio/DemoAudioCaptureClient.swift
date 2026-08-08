@@ -1,13 +1,23 @@
 import Foundation
 
+enum DemoAudioProfile: Equatable, Sendable {
+  case stableTone
+  case intermittentTone
+}
+
 @MainActor
 final class DemoAudioCaptureClient: AudioCaptureClient {
   private var captureCount = 0
   private var isCancelled = false
   private let stepDelay: Duration
+  private let profile: DemoAudioProfile
 
-  init(stepDelay: Duration = .milliseconds(35)) {
+  init(
+    stepDelay: Duration = .milliseconds(35),
+    profile: DemoAudioProfile = .stableTone
+  ) {
     self.stepDelay = stepDelay
+    self.profile = profile
   }
 
   var permission: MicrophonePermission { .granted }
@@ -34,6 +44,8 @@ final class DemoAudioCaptureClient: AudioCaptureClient {
     let sampleCount = Int(sampleRate * durationSeconds)
     let samples = (0..<sampleCount).map { index -> Float in
       let time = Double(index) / sampleRate
+      let isActive = profile == .stableTone || time < durationSeconds * 0.6
+      guard isActive else { return 0 }
       let fundamental = amplitude * sin(2 * .pi * 53.17 * time)
       let second = amplitude * 0.35 * sin(2 * .pi * 106.34 * time)
       let third = amplitude * 0.16 * sin(2 * .pi * 159.51 * time)

@@ -73,6 +73,15 @@ struct ScaffoldTests {
     #expect(!configuration.pacesDemoCaptureInRealTime)
   }
 
+  @Test func intermittentDemoKeepsTheRealWorldClassificationPathDeterministic() {
+    let configuration = AppRuntimeConfiguration(arguments: [
+      "PocketAcousticAnalyst", "-uiTesting", "-demoMode", "-intermittentDemo",
+    ])
+
+    #expect(configuration.usesDemoAudio)
+    #expect(configuration.demoAudioProfile == .intermittentTone)
+  }
+
   @MainActor
   @Test func poseMonitorRemainsInvalidAfterPhoneMovesAwayAndReturns() {
     let epoch = UUID()

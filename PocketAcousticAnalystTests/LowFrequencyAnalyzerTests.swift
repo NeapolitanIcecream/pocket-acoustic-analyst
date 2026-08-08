@@ -20,6 +20,7 @@ struct LowFrequencyAnalyzerTests {
 
       #expect(abs(tone.frequencyHz - 53.17) < 0.2)
       #expect(tone.isStable)
+      #expect(result.soundPattern == .stableTone)
       #expect(result.sampleRate == sampleRate)
       #expect(abs(result.binSpacingHz - sampleRate / Double(result.windowSampleCount)) < 1e-12)
     }
@@ -245,20 +246,44 @@ struct LowFrequencyAnalyzerTests {
     let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
 
     #expect(result.tone?.isStable != true)
+    #expect(result.soundPattern == .driftingTone)
   }
 
   @Test func doesNotInventPersistentToneFromWhiteNoise() throws {
     let sampleRate = 48_000.0
-    let signal = SignalFixture.stationary(
-      duration: 9,
+    for seed in [0xC0FFEE, 0xA11CE, 0xBAD5EED, 0xD15EA5E] as [UInt64] {
+      let signal = SignalFixture.stationary(
+        duration: 9,
+        sampleRate: sampleRate,
+        tones: [],
+        noiseAmplitude: 0.06,
+        noiseSeed: seed
+      )
+
+      let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+
+      #expect(result.tone == nil)
+      #expect(result.candidateTone == nil)
+      #expect(result.soundPattern == .distributedEnergy)
+    }
+  }
+
+  @Test func sequentialIndependentTonesAreNotMisreadAsContinuousDrift() throws {
+    let sampleRate = 48_000.0
+    let signal = SignalFixture.frequencyStepTone(
+      duration: 20,
+      changeAt: 10,
       sampleRate: sampleRate,
-      tones: [],
-      noiseAmplitude: 0.06
+      firstFrequency: 53.17,
+      secondFrequency: 83.4,
+      amplitude: 0.12,
+      noiseAmplitude: 0.002
     )
 
     let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
 
-    #expect(result.tone == nil)
+    #expect(result.soundPattern != .driftingTone)
+    #expect(result.soundPattern != .stableTone)
   }
 
   @Test func exposesCompetingIndependentTone() throws {
@@ -276,6 +301,7 @@ struct LowFrequencyAnalyzerTests {
     #expect(
       tone.competingToneFrequenciesHz.contains { abs($0 - 83.4) < 0.3 || abs($0 - 53.1) < 0.3 })
     #expect(tone.confidence != .high)
+    #expect(result.soundPattern == .multipleTones)
   }
 
   @Test func clippingLowersMeasurementQuality() throws {
@@ -389,6 +415,10 @@ struct LowFrequencyAnalyzerTests {
     )
 
     #expect(result.tone == nil)
+    let candidate = try #require(result.candidateTone)
+    #expect(abs(candidate.frequencyHz - 53.17) < 0.25)
+    #expect(candidate.persistence < result.configuration.minimumTonePersistence)
+    #expect(result.soundPattern == .intermittentTone)
     #expect(try #require(result.lockedBand).levelSpreadDB > 3)
   }
 
@@ -407,6 +437,27 @@ struct LowFrequencyAnalyzerTests {
 
     #expect(result.tone?.confidence != .high)
     #expect(result.tone?.isStable != true)
+    #expect(result.soundPattern == .driftingTone)
+  }
+
+  @Test func changingToneLevelRemainsUsefulForCharacterization() throws {
+    let sampleRate = 48_000.0
+    let signal = SignalFixture.levelStepTone(
+      duration: 20,
+      changeAt: 10,
+      sampleRate: sampleRate,
+      frequency: 53.17,
+      firstAmplitude: 0.12,
+      secondAmplitude: 0.03,
+      noiseAmplitude: 0.002
+    )
+
+    let result = try analyzer.analyze(samples: signal, sampleRate: sampleRate)
+
+    #expect(result.soundPattern == .varyingLevelTone)
+    #expect(result.quality.issues.contains(.unstableEnvironment))
+    #expect(!result.quality.isUsable)
+    #expect(result.quality.isUsableForSoundCharacterization)
   }
 
   @Test func looseNearMultipleIsNotGroupedAsHarmonic() throws {
@@ -443,9 +494,10 @@ private enum SignalFixture {
     duration: Double,
     sampleRate: Double,
     tones: [(frequency: Double, amplitude: Double)],
-    noiseAmplitude: Double = 0
+    noiseAmplitude: Double = 0,
+    noiseSeed: UInt64 = 0xC0FFEE
   ) -> [Float] {
-    var random = SeededNoise(seed: 0xC0FFEE)
+    var random = SeededNoise(seed: noiseSeed)
     return (0..<Int(duration * sampleRate)).map { sampleIndex in
       let time = Double(sampleIndex) / sampleRate
       let tonal = tones.reduce(0.0) { partial, tone in
@@ -485,6 +537,42 @@ private enum SignalFixture {
       let time = Double(sampleIndex) / sampleRate
       let phase = 2 * Double.pi * (startFrequency * time + 0.5 * slope * time * time)
       return Float(amplitude * sin(phase) + noiseAmplitude * random.next())
+    }
+  }
+
+  static func levelStepTone(
+    duration: Double,
+    changeAt: Double,
+    sampleRate: Double,
+    frequency: Double,
+    firstAmplitude: Double,
+    secondAmplitude: Double,
+    noiseAmplitude: Double
+  ) -> [Float] {
+    var random = SeededNoise(seed: 0x1EAE1)
+    return (0..<Int(duration * sampleRate)).map { sampleIndex in
+      let time = Double(sampleIndex) / sampleRate
+      let amplitude = time < changeAt ? firstAmplitude : secondAmplitude
+      return Float(
+        amplitude * sin(2 * .pi * frequency * time) + noiseAmplitude * random.next())
+    }
+  }
+
+  static func frequencyStepTone(
+    duration: Double,
+    changeAt: Double,
+    sampleRate: Double,
+    firstFrequency: Double,
+    secondFrequency: Double,
+    amplitude: Double,
+    noiseAmplitude: Double
+  ) -> [Float] {
+    var random = SeededNoise(seed: 0x57E9)
+    return (0..<Int(duration * sampleRate)).map { sampleIndex in
+      let time = Double(sampleIndex) / sampleRate
+      let frequency = time < changeAt ? firstFrequency : secondFrequency
+      return Float(
+        amplitude * sin(2 * .pi * frequency * time) + noiseAmplitude * random.next())
     }
   }
 }
