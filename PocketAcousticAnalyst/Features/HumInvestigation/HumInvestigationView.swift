@@ -227,6 +227,14 @@ struct HumInvestigationView: View {
       .buttonStyle(PrimaryButtonStyle())
       .accessibilityIdentifier("startSpatialScan")
 
+      if SourceFrequencyPlanner().makePlan(from: analysis) != nil {
+        Button("逐项排查设备状态") {
+          appModel.path.append(.sourceInvestigation(analysisID: analysis.id))
+        }
+        .buttonStyle(.borderedProminent)
+        .accessibilityIdentifier("startSourceInvestigation")
+      }
+
       relativeMeasurementNote
       measurementDetails(analysis)
     }
@@ -265,11 +273,17 @@ struct HumInvestigationView: View {
       }
       Button("重新测量") { model.retry() }
         .buttonStyle(PrimaryButtonStyle())
+      if SourceFrequencyPlanner().makePlan(from: analysis) != nil {
+        Button("逐项排查设备状态") {
+          appModel.path.append(.sourceInvestigation(analysisID: analysis.id))
+        }
+        .buttonStyle(.borderedProminent)
+        .accessibilityIdentifier("startSourceInvestigation")
+      }
       relativeMeasurementNote
       measurementDetails(analysis)
     }
     .padding(24)
-    .accessibilityIdentifier("toneNotDetectedResult")
     .onAppear { appModel.store(analysis) }
   }
 

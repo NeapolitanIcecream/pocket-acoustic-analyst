@@ -16,9 +16,13 @@ struct AppRuntimeConfiguration: Equatable, Sendable {
     usesDemoPoseTracking = isDemoMode
     usesInMemoryRepository = isDemoMode || isUITesting
     pacesDemoCaptureInRealTime = isRealPoseTest
-    demoAudioProfile =
-      isDemoMode && arguments.contains("-intermittentDemo")
-      ? .intermittentTone : .stableTone
+    if isDemoMode, arguments.contains("-sourceExperimentDemo") {
+      demoAudioProfile = .sourceExperiment
+    } else if isDemoMode, arguments.contains("-intermittentDemo") {
+      demoAudioProfile = .intermittentTone
+    } else {
+      demoAudioProfile = .stableTone
+    }
   }
 }
 
@@ -27,6 +31,8 @@ struct AppRuntimeConfiguration: Equatable, Sendable {
 final class AppModel {
   enum Route: Hashable {
     case humInvestigation
+    case sourceInvestigation(analysisID: UUID)
+    case sourceInvestigationDetails(investigationID: UUID)
     case spatialScan(analysisID: UUID)
     case comparison(analysisID: UUID?)
     case history
@@ -36,6 +42,7 @@ final class AppModel {
 
   var path: [Route] = []
   var completedAnalyses: [AcousticAnalysis] = []
+  var completedSourceInvestigations: [SourceInvestigationEvaluation] = []
   var completedSpatialScans: [SpatialScanEvaluation] = []
   var completedComparisons: [MeasurementComparison] = []
   var historyLoadError = false
@@ -89,6 +96,20 @@ final class AppModel {
     completedAnalyses.first { $0.id == id }
   }
 
+  func sourceInvestigation(id: UUID) -> SourceInvestigationEvaluation? {
+    completedSourceInvestigations.first { $0.id == id }
+  }
+
+  func store(_ sourceInvestigation: SourceInvestigationEvaluation) {
+    completedSourceInvestigations.removeAll { $0.id == sourceInvestigation.id }
+    completedSourceInvestigations.append(sourceInvestigation)
+    for measurement in sourceInvestigation.measurements {
+      completedAnalyses.removeAll { $0.id == measurement.analysis.id }
+      completedAnalyses.append(measurement.analysis)
+    }
+    persistHistory()
+  }
+
   func store(_ scan: SpatialScanEvaluation) {
     completedSpatialScans.removeAll { $0.id == scan.id }
     completedSpatialScans.append(scan)
@@ -111,6 +132,7 @@ final class AppModel {
     do {
       let archive = try await repository.load()
       completedAnalyses = archive.analyses
+      completedSourceInvestigations = archive.sourceInvestigations
       completedSpatialScans = archive.spatialScans
       completedComparisons = archive.comparisons
       historyLoadError = false
@@ -123,7 +145,8 @@ final class AppModel {
     let archive = InvestigationArchive(
       analyses: completedAnalyses,
       spatialScans: completedSpatialScans,
-      comparisons: completedComparisons
+      comparisons: completedComparisons,
+      sourceInvestigations: completedSourceInvestigations
     )
     let repository = repository
     let previousTask = persistenceTask

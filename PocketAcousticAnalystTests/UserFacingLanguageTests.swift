@@ -1,11 +1,26 @@
 import Foundation
 import Testing
+@testable import PocketAcousticAnalyst
 
 #if targetEnvironment(simulator)
   @Suite("User-facing language")
   struct UserFacingLanguageTests {
     @Test("Feature copy avoids unexplained instrument terms and unsupported claims")
     func featureCopyUsesProblemLanguage() throws {
+      #expect(
+        SourceInvestigationAccessibilityCopy.completed(2, total: 7)
+          == "已完成 2 次，共 7 次"
+      )
+      #expect(SourceInvestigationAccessibilityCopy.countdown(3) == "距离开始还有 3 秒")
+      #expect(
+        SourceInvestigationAccessibilityCopy.recordingLabel(sequenceIndex: 4)
+          == "第 5 次录音进度"
+      )
+      #expect(
+        SourceInvestigationAccessibilityCopy.recordingValue(progress: 0.42)
+          == "已完成 42%"
+      )
+
       let repositoryRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()

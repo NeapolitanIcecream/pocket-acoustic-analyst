@@ -15,7 +15,11 @@ struct InvestigationRepositoryTests {
     intermittent.tone = nil
     intermittent.candidateTone = analysis.tone
     intermittent.soundPattern = .intermittentTone
-    let archive = InvestigationArchive(analyses: [analysis, intermittent])
+    let sourceInvestigation = Self.sourceInvestigationFixture(analysis: analysis)
+    let archive = InvestigationArchive(
+      analyses: [analysis, intermittent],
+      sourceInvestigations: [sourceInvestigation]
+    )
 
     try await repository.save(archive)
     let loaded = try await repository.load()
@@ -27,8 +31,37 @@ struct InvestigationRepositoryTests {
     #expect(loaded.analyses.first?.lockedBand?.centerFrequencyHz == 53.17)
     #expect(loaded.analyses.last?.candidateTone?.frequencyHz == 53.17)
     #expect(loaded.analyses.last?.soundPattern == .intermittentTone)
+    #expect(loaded.sourceInvestigations == [sourceInvestigation])
     #expect(!encodedText.contains("\"samples\""))
-    #expect(encodedText.contains("\"schemaVersion\":1"))
+    #expect(encodedText.contains("\"schemaVersion\":2"))
+    #expect(encodedText.contains("\"sourceInvestigations\""))
+  }
+
+  @Test func versionOneArchiveWithoutSourceInvestigationsMigratesToVersionTwo() throws {
+    let archive = InvestigationArchive(analyses: [Self.analysisFixture()])
+    let encoded = try JSONEncoder().encode(archive)
+    var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    root["schemaVersion"] = 1
+    root.removeValue(forKey: "sourceInvestigations")
+
+    let legacyData = try JSONSerialization.data(withJSONObject: root)
+    let decoded = try JSONDecoder().decode(InvestigationArchive.self, from: legacyData)
+
+    #expect(decoded.schemaVersion == InvestigationArchive.currentSchemaVersion)
+    #expect(decoded.analyses.count == 1)
+    #expect(decoded.sourceInvestigations.isEmpty)
+  }
+
+  @Test func futureArchiveSchemaIsRejectedInsteadOfSilentlyMisread() throws {
+    let archive = InvestigationArchive(analyses: [Self.analysisFixture()])
+    let encoded = try JSONEncoder().encode(archive)
+    var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    root["schemaVersion"] = InvestigationArchive.currentSchemaVersion + 1
+    let futureData = try JSONSerialization.data(withJSONObject: root)
+
+    #expect(throws: DecodingError.self) {
+      try JSONDecoder().decode(InvestigationArchive.self, from: futureData)
+    }
   }
 
   @Test func archiveFromBeforeSoundPatternsStillDecodes() throws {
@@ -51,6 +84,39 @@ struct InvestigationRepositoryTests {
 }
 
 extension InvestigationRepositoryTests {
+  fileprivate static func sourceInvestigationFixture(
+    analysis: AcousticAnalysis
+  ) -> SourceInvestigationEvaluation {
+    SourceInvestigationEvaluation(
+      measuredAt: Date(timeIntervalSince1970: 1_700_000_020),
+      subjectName: "测试设备",
+      baselineStateName: "开启",
+      changedStateName: "关闭",
+      targetBands: [
+        SourceFrequencyBand(
+          centerFrequencyHz: 53.17,
+          halfWidthHz: 1,
+          memberFrequenciesHz: [53.17],
+          containsUnresolvedComponents: false
+        )
+      ],
+      measurements: [
+        SourceInvestigationMeasurement(
+          sequenceIndex: 0,
+          state: .baseline,
+          analysis: analysis,
+          position: nil,
+          positionConfirmedByUser: true
+        )
+      ],
+      rounds: [],
+      bandSummaries: [],
+      verdict: .inconclusive,
+      confidence: .low,
+      issues: [.incompleteSequence]
+    )
+  }
+
   fileprivate static func analysisFixture() -> AcousticAnalysis {
     AcousticAnalysis(
       measuredAt: Date(timeIntervalSince1970: 1_700_000_000),

@@ -101,6 +101,21 @@ struct SpectrumPoint: Codable, Equatable, Sendable, Identifiable {
   var id: Double { frequencyHz }
 }
 
+struct FrequencyBandDefinition: Equatable, Sendable {
+  var centerFrequencyHz: Double
+  var halfWidthHz: Double
+}
+
+struct SpectralComponentEvidence: Codable, Equatable, Sendable, Identifiable {
+  var frequencyHz: Double
+  var levelDB: Double
+  var prominenceDB: Double
+  var persistence: Double
+  var frequencySpreadHz: Double
+
+  var id: Double { frequencyHz }
+}
+
 struct SpectrogramSlice: Codable, Equatable, Sendable, Identifiable {
   var offsetSeconds: Double
   var levelsDB: [Double]
@@ -182,13 +197,16 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
   var binSpacingHz: Double
   var nominalFrequencyResolutionHz: Double
   var lowFrequencyLevelDB: Double
+  var lowFrequencyIndependentBlockLevelsDB: [Double]? = nil
   var spectrum: [SpectrumPoint]
   var spectrogramFrequenciesHz: [Double]
   var spectrogram: [SpectrogramSlice]
   var tone: ToneAnalysis?
   var candidateTone: ToneAnalysis? = nil
+  var spectralComponents: [SpectralComponentEvidence]? = nil
   var soundPattern: LowFrequencySoundPattern? = nil
   var lockedBand: LockedBandAnalysis?
+  var trackedBands: [LockedBandAnalysis]? = nil
   var quality: MeasurementQuality
 
   init(
@@ -206,13 +224,16 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
     binSpacingHz: Double,
     nominalFrequencyResolutionHz: Double,
     lowFrequencyLevelDB: Double,
+    lowFrequencyIndependentBlockLevelsDB: [Double]? = nil,
     spectrum: [SpectrumPoint],
     spectrogramFrequenciesHz: [Double],
     spectrogram: [SpectrogramSlice],
     tone: ToneAnalysis?,
     candidateTone: ToneAnalysis? = nil,
+    spectralComponents: [SpectralComponentEvidence]? = nil,
     soundPattern: LowFrequencySoundPattern? = nil,
     lockedBand: LockedBandAnalysis? = nil,
+    trackedBands: [LockedBandAnalysis]? = nil,
     quality: MeasurementQuality
   ) {
     self.id = id
@@ -229,13 +250,16 @@ struct AcousticAnalysis: Codable, Equatable, Sendable, Identifiable {
     self.binSpacingHz = binSpacingHz
     self.nominalFrequencyResolutionHz = nominalFrequencyResolutionHz
     self.lowFrequencyLevelDB = lowFrequencyLevelDB
+    self.lowFrequencyIndependentBlockLevelsDB = lowFrequencyIndependentBlockLevelsDB
     self.spectrum = spectrum
     self.spectrogramFrequenciesHz = spectrogramFrequenciesHz
     self.spectrogram = spectrogram
     self.tone = tone
     self.candidateTone = candidateTone
+    self.spectralComponents = spectralComponents
     self.soundPattern = soundPattern
     self.lockedBand = lockedBand
+    self.trackedBands = trackedBands
     self.quality = quality
   }
 

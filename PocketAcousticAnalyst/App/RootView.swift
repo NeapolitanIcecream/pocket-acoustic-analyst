@@ -16,6 +16,34 @@ struct RootView: View {
               analyzer: appModel.analyzer,
               isDemoMode: appModel.isDemoMode
             )
+          case .sourceInvestigation(let analysisID):
+            if let analysis = appModel.analysis(id: analysisID) {
+              SourceInvestigationView(
+                referenceAnalysis: analysis,
+                captureClient: appModel.audioCapture,
+                poseClient: appModel.usesDemoPoseTracking
+                  ? DemoPoseTrackingClient(poses: [SpatialCoordinate(x: 0, y: 0, z: 0)])
+                  : ARPoseTrackingClient(),
+                analyzer: appModel.analyzer,
+                isDemoMode: appModel.isDemoMode
+              )
+            } else {
+              ContentUnavailableView(
+                "找不到起始测量",
+                systemImage: "exclamationmark.triangle",
+                description: Text("请返回首页重新检查这段声音。")
+              )
+            }
+          case .sourceInvestigationDetails(let investigationID):
+            if let evaluation = appModel.sourceInvestigation(id: investigationID) {
+              SourceInvestigationDetailView(evaluation: evaluation)
+            } else {
+              ContentUnavailableView(
+                "找不到状态调查",
+                systemImage: "exclamationmark.triangle",
+                description: Text("这条记录可能已被移除，请返回调查记录。")
+              )
+            }
           case .spatialScan(let analysisID):
             if let analysis = appModel.analysis(id: analysisID) {
               SpatialScanView(

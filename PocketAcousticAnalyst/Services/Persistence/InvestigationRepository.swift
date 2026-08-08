@@ -1,10 +1,51 @@
 import Foundation
 
 struct InvestigationArchive: Codable, Equatable, Sendable {
-  var schemaVersion: Int = 1
+  static let currentSchemaVersion = 2
+
+  var schemaVersion: Int
   var analyses: [AcousticAnalysis] = []
   var spatialScans: [SpatialScanEvaluation] = []
   var comparisons: [MeasurementComparison] = []
+  var sourceInvestigations: [SourceInvestigationEvaluation] = []
+
+  init(
+    schemaVersion: Int = Self.currentSchemaVersion,
+    analyses: [AcousticAnalysis] = [],
+    spatialScans: [SpatialScanEvaluation] = [],
+    comparisons: [MeasurementComparison] = [],
+    sourceInvestigations: [SourceInvestigationEvaluation] = []
+  ) {
+    self.schemaVersion = schemaVersion
+    self.analyses = analyses
+    self.spatialScans = spatialScans
+    self.comparisons = comparisons
+    self.sourceInvestigations = sourceInvestigations
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let decodedSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+    guard decodedSchemaVersion <= Self.currentSchemaVersion else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .schemaVersion,
+        in: container,
+        debugDescription: "Unsupported investigation archive schema version \(decodedSchemaVersion)"
+      )
+    }
+
+    schemaVersion = Self.currentSchemaVersion
+    analyses = try container.decodeIfPresent([AcousticAnalysis].self, forKey: .analyses) ?? []
+    spatialScans =
+      try container.decodeIfPresent([SpatialScanEvaluation].self, forKey: .spatialScans) ?? []
+    comparisons =
+      try container.decodeIfPresent([MeasurementComparison].self, forKey: .comparisons) ?? []
+    sourceInvestigations =
+      try container.decodeIfPresent(
+        [SourceInvestigationEvaluation].self,
+        forKey: .sourceInvestigations
+      ) ?? []
+  }
 }
 
 protocol InvestigationRepository: Sendable {

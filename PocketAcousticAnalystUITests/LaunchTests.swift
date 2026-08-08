@@ -110,6 +110,53 @@ final class LaunchTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["两次测量不能可靠比较"].exists)
   }
 
+  func testDemoCompletesThreeRoundSourceInvestigation() {
+    let app = XCUIApplication()
+    app.launchArguments = ["-uiTesting", "-demoMode", "-sourceExperimentDemo"]
+    app.launch()
+
+    tap(app.buttons["startHumInvestigation"], in: app)
+    tap(app.buttons["requestMicrophonePermission"], in: app)
+    tap(app.buttons["startMeasurement"], in: app)
+    XCTAssertTrue(app.staticTexts["检测到多个低频音调"].waitForExistence(timeout: 20))
+    tap(app.buttons["startSourceInvestigation"], in: app)
+    tap(app.buttons["prepareSourceInvestigation"], in: app)
+
+    let expectedStepTitles = [
+      "记录初始状态",
+      "第 1 轮：改变后",
+      "第 1 轮：恢复检查",
+      "第 2 轮：改变后",
+      "第 2 轮：恢复检查",
+      "第 3 轮：改变后",
+      "第 3 轮：恢复检查",
+    ]
+    for index in 0..<7 {
+      XCTAssertTrue(app.staticTexts[expectedStepTitles[index]].waitForExistence(timeout: 8))
+      tap(app.buttons["captureSourceStep\(index)"], in: app)
+      if index < 6 {
+        tap(app.buttons["completeSourceStateChange\(index + 1)"], in: app)
+      }
+    }
+
+    XCTAssertTrue(app.staticTexts["发现重复同步的频率变化"].waitForExistence(timeout: 20))
+    XCTAssertTrue(
+      app.staticTexts.matching(
+        NSPredicate(format: "label CONTAINS %@", "连续三轮")
+      ).firstMatch.exists
+    )
+    tap(app.buttons["saveSourceInvestigation"], in: app)
+    tap(app.buttons["historyButton"], in: app)
+    XCTAssertTrue(app.staticTexts["发现重复同步的频率变化"].waitForExistence(timeout: 8))
+    tap(app.staticTexts["发现重复同步的频率变化"], in: app)
+    XCTAssertTrue(app.buttons["restartSourceInvestigation"].waitForExistence(timeout: 8))
+    tap(app.buttons["查看三轮检查依据"], in: app)
+    XCTAssertTrue(
+      app.staticTexts.matching(
+        NSPredicate(format: "label CONTAINS %@", "第 1 轮整体低频")
+      ).firstMatch.waitForExistence(timeout: 8))
+  }
+
   #if !targetEnvironment(simulator)
     func testRealDeviceCompletesAmbientAudioCapture() {
       let app = XCUIApplication()
